@@ -9,12 +9,16 @@ from textual.widgets import (
     TabbedContent,
     TabPane,
     DataTable,
+    Tree,
     Static,
     Label,
     Input,
-    Markdown
+    Markdown,
+    Button,
+    Switch
 )
 
+from lazyrtui import __version__
 from lazyrtui.ros import ROS2Manager, RCLPY_AVAILABLE
 from lazyrtui.config import ConfigLoader
 
@@ -48,24 +52,21 @@ Screen {
     padding: 0 1;
 }
 
-DataTable {
+DataTable, Tree {
     height: 100%;
 }
-"""
 
-HELP_MARKDOWN = """
-# LazyRTUI 快捷键帮助
+.about-card {
+    border: rounded $accent;
+    padding: 1 2;
+    margin: 1 2;
+}
 
-- **1 ~ 6**: 快速切换页签 (Node, Topic, Service, Action, Interface, Bag)
-- **Tab / Shift+Tab**: 在焦点元素间移动
-- **w**: 在面板区之间切换焦点 (Switch Focus Pane)
-- **j / k** 或 **Up / Down**: 列表中光标上下移动
-- **/**: 打开过滤搜索框
-- **r**: 刷新 ROS 拓扑状态
-- **e**: 开启/停止 Topic Echo
-- **p**: 开启/停止 Topic 实时绘图
-- **c**: 调用 Service 或发送 Action Goal
-- **q**: 退出程序
+.setting-row {
+    height: 3;
+    padding: 0 1;
+    align: left middle;
+}
 """
 
 class LazyRTUIApp(App):
@@ -80,6 +81,8 @@ class LazyRTUIApp(App):
         Binding("4", "select_tab('tab-actions')", "Actions", show=True),
         Binding("5", "select_tab('tab-interfaces')", "Interfaces", show=True),
         Binding("6", "select_tab('tab-bags')", "Bags", show=True),
+        Binding("7", "select_tab('tab-tf')", "TF Tree", show=True),
+        Binding("8", "select_tab('tab-about')", "About/Settings", show=True),
         Binding("w", "toggle_pane_focus", "Switch Focus", show=True),
         Binding("r", "refresh_ros", "Refresh", show=True),
         Binding("q", "quit", "Quit", show=True),
@@ -92,7 +95,7 @@ class LazyRTUIApp(App):
         self.ros_manager = ROS2Manager()
 
     def on_mount(self) -> None:
-        self.title = "LazyRTUI - ROS 2 Terminal Interface"
+        self.title = f"LazyRTUI v{__version__} - ROS 2 Terminal Interface"
         self.sub_title = "ROS 2 Management Tool"
         self.ros_manager.start()
         self.refresh_all_data()
@@ -153,6 +156,53 @@ class LazyRTUIApp(App):
                     yield Label("ROS Bag Record & Playback", classes="pane-title")
                     yield Static("Bag Manager", id="text-bag-manager")
 
+            with TabPane("7: TF Tree", id="tab-tf"):
+                with Horizontal():
+                    with Vertical(classes="pane-container", id="pane-tf-tree"):
+                        yield Label("TF Frame Hierarchy", classes="pane-title")
+                        yield Tree("TF Frames", id="tree-tf")
+                    with Vertical(classes="pane-container", id="pane-tf-detail"):
+                        yield Label("Frame Details (Transform)", classes="pane-title")
+                        yield Static("Select a frame in the tree to inspect transform data.", id="text-tf-detail")
+
+            with TabPane("8: About & Settings", id="tab-about"):
+                with Horizontal():
+                    with Vertical(classes="pane-container", id="pane-about-info"):
+                        yield Label("About LazyRTUI", classes="pane-title")
+                        about_md = f"""
+# LazyRTUI v{__version__}
+
+A keyboard-first, modular Terminal User Interface (TUI) for ROS 2.
+
+- **ROS 2 Status**: {"Connected (`rclpy` detected)" if RCLPY_AVAILABLE else "Offline / Demo Mode (`rclpy` missing)"}
+- **Python Version**: `{sys.version.split()[0]}`
+- **Config Path**: `{self.config_loader.config_path}`
+- **Log Prevention**: Enabled (Single Node `lazy_rtui_node`, zero file log spam)
+
+---
+
+### Quick Keybindings Reference
+- **1 ~ 8**: Switch Tabs
+- **w**: Toggle Focus between List & Detail Panes
+- **r**: Refresh ROS Topology
+- **/**: Quick Search Filter
+- **q**: Quit
+"""
+                        yield Markdown(about_md)
+
+                    with Vertical(classes="pane-container", id="pane-settings"):
+                        yield Label("Settings & Configuration", classes="pane-title")
+                        yield Label("\n[Preferences]", classes="setting-row")
+                        with Horizontal(classes="setting-row"):
+                            yield Label("Auto-refresh Topology (every 2s):  ")
+                            yield Switch(value=True, id="switch-auto-refresh")
+                        with Horizontal(classes="setting-row"):
+                            yield Label("Enable Mouse Support:             ")
+                            yield Switch(value=True, id="switch-mouse-support")
+                        with Horizontal(classes="setting-row"):
+                            yield Label("Single Node Log Suppression:      ")
+                            yield Switch(value=True, id="switch-log-suppress")
+
         yield Footer()
 
     def action_select_tab(self, tab_id: str) -> None:
@@ -175,6 +225,12 @@ class LazyRTUIApp(App):
                 self.set_focus(self.query_one("#text-topic-detail"))
             else:
                 self.set_focus(topic_table)
+        elif current_tab == "tab-tf":
+            tf_tree = self.query_one("#tree-tf", Tree)
+            if self.focused == tf_tree:
+                self.set_focus(self.query_one("#text-tf-detail"))
+            else:
+                self.set_focus(tf_tree)
 
     def action_refresh_ros(self) -> None:
         self.refresh_all_data()
@@ -207,6 +263,22 @@ class LazyRTUIApp(App):
         actions_table.add_columns("Action Name", "Type(s)")
         for name, types in self.ros_manager.get_actions():
             actions_table.add_row(name, ", ".join(types))
+
+        # Populate TF Tree
+        tf_tree_widget = self.query_one("#tree-tf", Tree)
+        tf_tree_widget.clear()
+        roots = self.ros_manager.get_tf_root_nodes()
+        for root_node in roots:
+            self._build_tf_tree_branch(tf_tree_widget.root, root_node)
+        tf_tree_widget.root.expand()
+
+    def _build_tf_tree_branch(self, parent_widget_node, tf_node):
+        tx, ty, tz = tf_node.translation
+        label = f"{tf_node.frame_id}  (Pos: [{tx:.2f}, {ty:.2f}, {tz:.2f}])"
+        widget_node = parent_widget_node.add(label, data=tf_node)
+        widget_node.expand()
+        for child in tf_node.children.values():
+            self._build_tf_tree_branch(widget_node, child)
 
 
 def main():

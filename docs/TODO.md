@@ -85,6 +85,17 @@
   * Log 过滤查看。
   * 简易 ROS Bag 录制与回放控制。
 
+### Tab 7: TF Tree 页面 (坐标变换树)
+* **功能**：
+  * 实时监听与解构 `/tf` 和 `/tf_static` 坐标关系。
+  * 树形（Tree Widget）展示 Parent -> Child 坐标系链路及 Translation / Rotation 数据。
+
+### Tab 8: About & Settings 页面 (关于与设置)
+* **功能**：
+  * 展示软件版本、当前 ROS 2 分布版本环境状态。
+  * 展示配置文件路径及快捷键参考指南。
+  * 提供配置选项开关与修改。
+
 ---
 
 ## 四、 键盘快捷键与焦点控制设计
@@ -160,11 +171,12 @@
 - [x] **阶段 1：项目基础设施搭设**
   - [x] 安装依赖 (`textual`, `rclpy`, `plotext`, `pyyaml`) 到 `.venv`。
   - [x] 搭建项目目录结构 (`src/lazyrtui/...`)。
-- [ ] **阶段 2：ROS 2 核心抽象层 (ROS2Manager)**
-  - [ ] 实现 `LazyRTUINode` 单例包装。
-  - [ ] 实现后台 Thread / Asyncio Task 进行 `rclpy.spin()`。
-  - [ ] 实现 Node / Topic / Service / Action 拓扑发现接口。
-  - [ ] 实现无日志垃圾的动态 Subscription / Service Client。
+- [x] **阶段 2：ROS 2 核心抽象层 (ROS2Manager)**
+  - [x] 实现 `LazyRTUINode` 单例包装。
+  - [x] 实现后台 Thread / Asyncio Task 进行 `rclpy.spin()`。
+  - [x] 实现 Node / Topic / Service / Action 拓扑发现接口。
+  - [x] 实现 TF 监听与 Tree 提取（解构 `/tf` 与 `/tf_static` 坐标链路）。
+  - [x] 实现无日志垃圾的动态 Subscription / Service Client。
 - [ ] **阶段 3：Textual UI 主框架构建**
   - [ ] 实现全局 App 主界面、Header、Footer、Help Modal。
   - [ ] 实现基于键盘快捷键的 TabbedContent 与 Panel 焦点切换系统。

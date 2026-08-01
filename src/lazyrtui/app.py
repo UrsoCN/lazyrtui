@@ -2,6 +2,7 @@ import sys
 from typing import ClassVar
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.screen import ModalScreen
 from textual.containers import Container, Horizontal, Vertical
 from textual.widgets import (
     Header,
@@ -67,7 +68,29 @@ DataTable, Tree {
     padding: 0 1;
     align: left middle;
 }
+
+ModalScreen {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.6);
+}
+
+#help-dialog {
+    padding: 1 2;
+    background: $surface;
+    border: thick $accent;
+    width: 70;
+    height: auto;
+    max-height: 85%;
+}
+
+#btn-close-help {
+    margin-top: 1;
+    width: 100%;
+}
 """
+
+
+
 
 class LazyRTUIApp(App):
     """Main Textual Application for ROS 2 TUI."""
@@ -119,7 +142,7 @@ class LazyRTUIApp(App):
                         yield DataTable(id="table-nodes")
                     with Vertical(classes="pane-container", id="pane-nodes-detail"):
                         yield Label("Node Details", classes="pane-title")
-                        yield Static("Select a node on the left to inspect details.", id="text-node-detail")
+                        yield Markdown("Select a node on the left to inspect details.", id="text-node-detail")
 
             with TabPane("2: Topics", id="tab-topics"):
                 with Horizontal():
@@ -128,7 +151,7 @@ class LazyRTUIApp(App):
                         yield DataTable(id="table-topics")
                     with Vertical(classes="pane-container", id="pane-topics-detail"):
                         yield Label("Topic Payload / Graph", classes="pane-title")
-                        yield Static("Select a topic to echo or plot data.", id="text-topic-detail")
+                        yield Markdown("Select a topic to echo or plot data.", id="text-topic-detail")
 
             with TabPane("3: Services", id="tab-services"):
                 with Horizontal():
@@ -137,7 +160,7 @@ class LazyRTUIApp(App):
                         yield DataTable(id="table-services")
                     with Vertical(classes="pane-container", id="pane-services-detail"):
                         yield Label("Service Request Builder", classes="pane-title")
-                        yield Static("Select a service to send request.", id="text-service-detail")
+                        yield Markdown("Select a service to send request.", id="text-service-detail")
 
             with TabPane("4: Actions", id="tab-actions"):
                 with Horizontal():
@@ -146,17 +169,17 @@ class LazyRTUIApp(App):
                         yield DataTable(id="table-actions")
                     with Vertical(classes="pane-container", id="pane-actions-detail"):
                         yield Label("Action Goal / Feedback", classes="pane-title")
-                        yield Static("Select an action to send goal.", id="text-action-detail")
+                        yield Markdown("Select an action to send goal.", id="text-action-detail")
 
             with TabPane("5: Interfaces", id="tab-interfaces"):
                 with Vertical(classes="pane-container"):
                     yield Label("Message / Service / Action Types", classes="pane-title")
-                    yield Static("Interface Explorer", id="text-interface-tree")
+                    yield Markdown("Interface Explorer", id="text-interface-tree")
 
             with TabPane("6: Bags", id="tab-bags"):
                 with Vertical(classes="pane-container"):
                     yield Label("ROS Bag Record & Playback", classes="pane-title")
-                    yield Static("Bag Manager", id="text-bag-manager")
+                    yield Markdown("Bag Manager", id="text-bag-manager")
 
             with TabPane("7: TF Tree", id="tab-tf"):
                 with Horizontal():
@@ -165,7 +188,7 @@ class LazyRTUIApp(App):
                         yield Tree("TF Frames", id="tree-tf")
                     with Vertical(classes="pane-container", id="pane-tf-detail"):
                         yield Label("Frame Details (Transform)", classes="pane-title")
-                        yield Static("Select a frame in the tree to inspect transform data.", id="text-tf-detail")
+                        yield Markdown("Select a frame in the tree to inspect transform data.", id="text-tf-detail")
 
             with TabPane("8: About & Settings", id="tab-about"):
                 with Horizontal():
@@ -192,7 +215,6 @@ A keyboard-first, modular Terminal User Interface (TUI) for ROS 2.
 - **1 ~ 8**: Switch Tabs
 - **w**: Toggle Focus between List & Detail Panes
 - **r**: Refresh ROS Topology
-- **/**: Quick Search Filter
 - **q**: Quit
 """
                         yield Markdown(about_md)
@@ -247,6 +269,117 @@ A keyboard-first, modular Terminal User Interface (TUI) for ROS 2.
         self._cached_actions = None
         self._cached_tf_structure = None
         self.refresh_all_data()
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Event handler when user highlights a row in any data table."""
+        table_id = event.data_table.id
+        if not event.row_key:
+            return
+
+        if table_id == "table-nodes":
+            try:
+                row_vals = event.data_table.get_row(event.row_key)
+                node_name = str(row_vals[0])
+                namespace = str(row_vals[1])
+                info = self.ros_manager.get_node_info(node_name, namespace)
+                
+                pubs_str = "\n".join([f"- `{p[0]}` ({', '.join(p[1])})" for p in info.get("publishers", [])]) or "_None_"
+                subs_str = "\n".join([f"- `{s[0]}` ({', '.join(s[1])})" for s in info.get("subscribers", [])]) or "_None_"
+                srvs_str = "\n".join([f"- `{v[0]}` ({', '.join(v[1])})" for v in info.get("services", [])]) or "_None_"
+                
+                md = f"""### Node: `{node_name}`
+**Namespace**: `{namespace}`
+
+#### 📢 Publishers
+{pubs_str}
+
+#### 📥 Subscribers
+{subs_str}
+
+#### ⚙️ Services
+{srvs_str}
+"""
+                self.query_one("#text-node-detail", Markdown).update(md)
+            except Exception:
+                pass
+
+        elif table_id == "table-topics":
+            try:
+                row_vals = event.data_table.get_row(event.row_key)
+                topic_name = str(row_vals[0])
+                info = self.ros_manager.get_topic_info(topic_name)
+                types_str = ", ".join(info.get("types", []))
+                md = f"""### Topic: `{topic_name}`
+**Type(s)**: `{types_str}`
+
+- **Publishers Count**: `{info.get('publisher_count', 0)}`
+- **Subscribers Count**: `{info.get('subscriber_count', 0)}`
+
+---
+_Press 'e' to start Echo or 'p' to plot numerical data_
+"""
+                self.query_one("#text-topic-detail", Markdown).update(md)
+            except Exception:
+                pass
+
+        elif table_id == "table-services":
+            try:
+                row_vals = event.data_table.get_row(event.row_key)
+                service_name = str(row_vals[0])
+                info = self.ros_manager.get_service_info(service_name)
+                types_str = ", ".join(info.get("types", []))
+                req_json = info.get("sample_request", "{}")
+                md = f"""### Service: `{service_name}`
+**Type(s)**: `{types_str}`
+
+#### Sample Request Payload:
+```json
+{req_json}
+```
+---
+_Press 'c' to build and invoke service_
+"""
+                self.query_one("#text-service-detail", Markdown).update(md)
+            except Exception:
+                pass
+
+        elif table_id == "table-actions":
+            try:
+                row_vals = event.data_table.get_row(event.row_key)
+                action_name = str(row_vals[0])
+                action_type = str(row_vals[1])
+                md = f"""### Action: `{action_name}`
+**Type**: `{action_type}`
+
+- **Status**: Ready
+---
+_Press 'c' to send action goal_
+"""
+                self.query_one("#text-action-detail", Markdown).update(md)
+            except Exception:
+                pass
+
+    def on_tree_node_highlighted(self, event: Tree.NodeHighlighted) -> None:
+        """Event handler when user highlights a TF frame in the TF Tree."""
+        tf_node = event.node.data
+        if tf_node:
+            tx, ty, tz = tf_node.translation
+            rx, ry, rz, rw = tf_node.rotation
+            md = f"""### TF Frame: `{tf_node.frame_id}`
+**Parent Frame**: `{tf_node.parent_id or "Root (No Parent)"}`
+
+#### 📍 Translation (Position)
+- **X**: `{tx:.4f}`
+- **Y**: `{ty:.4f}`
+- **Z**: `{tz:.4f}`
+
+#### 🔄 Rotation (Quaternion)
+- **X**: `{rx:.4f}`
+- **Y**: `{ry:.4f}`
+- **Z**: `{rz:.4f}`
+- **W**: `{rw:.4f}`
+"""
+            self.query_one("#text-tf-detail", Markdown).update(md)
 
     def _update_table_smart(self, table_id: str, new_rows: list[tuple], columns: list[str], cache_attr: str) -> None:
         cached_data = getattr(self, cache_attr, None)

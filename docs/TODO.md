@@ -177,9 +177,10 @@
   - [x] 实现 Node / Topic / Service / Action 拓扑发现接口。
   - [x] 实现 TF 监听与 Tree 提取（解构 `/tf` 与 `/tf_static` 坐标链路）。
   - [x] 实现无日志垃圾的动态 Subscription / Service Client。
-- [ ] **阶段 3：Textual UI 主框架构建**
-  - [ ] 实现全局 App 主界面、Header、Footer、Help Modal。
-  - [ ] 实现基于键盘快捷键的 TabbedContent 与 Panel 焦点切换系统。
+- [x] **阶段 3：Textual UI 主框架构建**
+  - [x] 实现全局 App 主界面、Header、Footer、Help Modal（`?` 键弹窗）。
+  - [x] 实现基于键盘快捷键的 TabbedContent 与 Panel 焦点切换系统。
+  - [x] 实现 Node/Topic/Service/Action/TF 选中行高亮事件监听与右侧 Details 真实数据同步联动。
 - [ ] **阶段 4：各个功能 Tab 页实现**
   - [ ] Node Tab (列表与详情)。
   - [ ] Topic Tab (拓扑、Echo 查看、数据绘图)。

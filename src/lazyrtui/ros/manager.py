@@ -242,6 +242,87 @@ class ROS2Manager:
             logging.error(f"Failed to get actions: {e}")
             return []
 
+    def get_node_info(self, node_name: str, namespace: str = "/") -> Dict[str, Any]:
+        """Returns details about a node (publishers, subscribers, services)."""
+        if not self.is_connected or not self.node:
+            if "turtle" in node_name:
+                return {
+                    "name": node_name,
+                    "namespace": namespace,
+                    "publishers": [("/turtle1/pose", ["turtlesim/msg/Pose"]), ("/rosout", ["rcl_interfaces/msg/Log"])],
+                    "subscribers": [("/turtle1/cmd_vel", ["geometry_msgs/msg/Twist"])],
+                    "services": [("/clear", ["std_srvs/srv/Empty"]), ("/spawn", ["turtlesim/srv/Spawn"]), ("/reset", ["std_srvs/srv/Empty"])],
+                }
+            return {
+                "name": node_name,
+                "namespace": namespace,
+                "publishers": [("/rosout", ["rcl_interfaces/msg/Log"])],
+                "subscribers": [],
+                "services": [],
+            }
+
+        try:
+            pubs = self.node.get_publisher_names_and_types_by_node(node_name, namespace)
+            subs = self.node.get_subscriber_names_and_types_by_node(node_name, namespace)
+            srvs = self.node.get_service_names_and_types_by_node(node_name, namespace)
+            return {
+                "name": node_name,
+                "namespace": namespace,
+                "publishers": pubs,
+                "subscribers": subs,
+                "services": srvs,
+            }
+        except Exception as e:
+            logging.error(f"Failed to get info for node {node_name}: {e}")
+            return {"name": node_name, "namespace": namespace, "publishers": [], "subscribers": [], "services": []}
+
+    def get_topic_info(self, topic_name: str) -> Dict[str, Any]:
+        """Returns details about a topic (publishers count, subscribers count, type)."""
+        all_topics = dict(self.get_topics())
+        topic_types = all_topics.get(topic_name, ["Unknown"])
+
+        if not self.is_connected or not self.node:
+            return {
+                "topic": topic_name,
+                "types": topic_types,
+                "publisher_count": 1,
+                "subscriber_count": 2,
+            }
+
+        try:
+            pubs_info = self.node.get_publishers_info_by_topic(topic_name)
+            subs_info = self.node.get_subscriptions_info_by_topic(topic_name)
+            return {
+                "topic": topic_name,
+                "types": topic_types,
+                "publisher_count": len(pubs_info),
+                "subscriber_count": len(subs_info),
+            }
+        except Exception:
+            return {
+                "topic": topic_name,
+                "types": topic_types,
+                "publisher_count": 0,
+                "subscriber_count": 0,
+            }
+
+    def get_service_info(self, service_name: str) -> Dict[str, Any]:
+        """Returns details about a service."""
+        all_services = dict(self.get_services())
+        service_types = all_services.get(service_name, ["Unknown"])
+        return {
+            "service": service_name,
+            "types": service_types,
+            "sample_request": self._get_sample_service_request(service_types[0] if service_types else "")
+        }
+
+    def _get_sample_service_request(self, service_type: str) -> str:
+        if "Spawn" in service_type:
+            return '{\n  "x": 2.0,\n  "y": 2.0,\n  "theta": 0.0,\n  "name": "turtle2"\n}'
+        if "SetPen" in service_type:
+            return '{\n  "r": 255,\n  "g": 0,\n  "b": 0,\n  "width": 3,\n  "off": 0\n}'
+        return '{\n  # Standard Request Payload\n}'
+
     def get_tf_root_nodes(self) -> List[TFTreeNode]:
         """Finds all root nodes (frames without a parent or whose parent is not tracked)."""
         roots = []

@@ -57,7 +57,7 @@ DataTable, Tree {
 }
 
 .about-card {
-    border: rounded $accent;
+    border: round $accent;
     padding: 1 2;
     margin: 1 2;
 }
@@ -178,6 +178,11 @@ A keyboard-first, modular Terminal User Interface (TUI) for ROS 2.
 - **Python Version**: `{sys.version.split()[0]}`
 - **Config Path**: `{self.config_loader.config_path}`
 - **Log Prevention**: Enabled (Single Node `lazy_rtui_node`, zero file log spam)
+
+---
+
+### 💡 终端文本复制技巧 (Text Copying Guide)
+- **终端原生鼠标选择**: 按住键盘 **`Shift`** 键不放并用鼠标在终端中划词，即可绕过 TUI 捕获，使用终端原生的选中和 `Ctrl+Shift+C` 复制功能！
 
 ---
 

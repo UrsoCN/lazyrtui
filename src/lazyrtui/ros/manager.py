@@ -1,8 +1,10 @@
+import os
 import sys
 import time
 import threading
 import logging
 from typing import List, Tuple, Dict, Any, Optional, Callable
+
 
 try:
     import rclpy
@@ -18,6 +20,7 @@ try:
     ROSIDL_AVAILABLE = True
 except ImportError:
     ROSIDL_AVAILABLE = False
+
 
 
 class TFTreeNode:

@@ -99,6 +99,8 @@ class LazyRTUIApp(App):
         self.sub_title = "ROS 2 Management Tool"
         self.ros_manager.start()
         self.refresh_all_data()
+        # Periodically refresh ROS topology as DDS graph updates
+        self.set_interval(2.0, self.refresh_all_data)
 
     def on_unmount(self) -> None:
         self.ros_manager.stop()
@@ -238,44 +240,59 @@ A keyboard-first, modular Terminal User Interface (TUI) for ROS 2.
                 self.set_focus(tf_tree)
 
     def action_refresh_ros(self) -> None:
+        # Force refresh bypassing cache
+        self._cached_nodes = None
+        self._cached_topics = None
+        self._cached_services = None
+        self._cached_actions = None
+        self._cached_tf_structure = None
         self.refresh_all_data()
 
+    def _update_table_smart(self, table_id: str, new_rows: list[tuple], columns: list[str], cache_attr: str) -> None:
+        cached_data = getattr(self, cache_attr, None)
+        if cached_data == new_rows:
+            return  # Data has not changed! Do not touch table UI or reset cursor!
+
+        setattr(self, cache_attr, new_rows)
+        table = self.query_one(table_id, DataTable)
+
+        # Save old cursor coordinate
+        old_cursor = table.cursor_coordinate
+
+        table.clear(columns=True)
+        table.add_columns(*columns)
+        for row in new_rows:
+            table.add_row(*row)
+
+        # Restore cursor position safely
+        if table.row_count > 0:
+            target_row = min(old_cursor.row, table.row_count - 1)
+            target_col = min(old_cursor.column, max(0, len(columns) - 1))
+            table.move_cursor(row=target_row, column=target_col)
+
     def refresh_all_data(self) -> None:
-        # Populate Nodes table
-        nodes_table = self.query_one("#table-nodes", DataTable)
-        nodes_table.clear(columns=True)
-        nodes_table.add_columns("Node Name", "Namespace")
-        for name, ns in self.ros_manager.get_nodes():
-            nodes_table.add_row(name, ns)
+        nodes = [(name, ns) for name, ns in self.ros_manager.get_nodes()]
+        self._update_table_smart("#table-nodes", nodes, ["Node Name", "Namespace"], "_cached_nodes")
 
-        # Populate Topics table
-        topics_table = self.query_one("#table-topics", DataTable)
-        topics_table.clear(columns=True)
-        topics_table.add_columns("Topic Name", "Type(s)")
-        for name, types in self.ros_manager.get_topics():
-            topics_table.add_row(name, ", ".join(types))
+        topics = [(name, ", ".join(types)) for name, types in self.ros_manager.get_topics()]
+        self._update_table_smart("#table-topics", topics, ["Topic Name", "Type(s)"], "_cached_topics")
 
-        # Populate Services table
-        services_table = self.query_one("#table-services", DataTable)
-        services_table.clear(columns=True)
-        services_table.add_columns("Service Name", "Type(s)")
-        for name, types in self.ros_manager.get_services():
-            services_table.add_row(name, ", ".join(types))
+        services = [(name, ", ".join(types)) for name, types in self.ros_manager.get_services()]
+        self._update_table_smart("#table-services", services, ["Service Name", "Type(s)"], "_cached_services")
 
-        # Populate Actions table
-        actions_table = self.query_one("#table-actions", DataTable)
-        actions_table.clear(columns=True)
-        actions_table.add_columns("Action Name", "Type(s)")
-        for name, types in self.ros_manager.get_actions():
-            actions_table.add_row(name, ", ".join(types))
+        actions = [(name, ", ".join(types)) for name, types in self.ros_manager.get_actions()]
+        self._update_table_smart("#table-actions", actions, ["Action Name", "Type(s)"], "_cached_actions")
 
-        # Populate TF Tree
-        tf_tree_widget = self.query_one("#tree-tf", Tree)
-        tf_tree_widget.clear()
+        # Refresh TF Tree only if structure or frame IDs changed
         roots = self.ros_manager.get_tf_root_nodes()
-        for root_node in roots:
-            self._build_tf_tree_branch(tf_tree_widget.root, root_node)
-        tf_tree_widget.root.expand()
+        tf_structure_key = tuple(sorted(self.ros_manager.tf_frames.keys()))
+        if getattr(self, "_cached_tf_structure", None) != tf_structure_key:
+            self._cached_tf_structure = tf_structure_key
+            tf_tree_widget = self.query_one("#tree-tf", Tree)
+            tf_tree_widget.clear()
+            for root_node in roots:
+                self._build_tf_tree_branch(tf_tree_widget.root, root_node)
+            tf_tree_widget.root.expand()
 
     def _build_tf_tree_branch(self, parent_widget_node, tf_node):
         tx, ty, tz = tf_node.translation

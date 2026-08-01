@@ -118,6 +118,9 @@ class ROS2Manager:
             self._stop_event.clear()
             self._executor_thread = threading.Thread(target=self._spin_loop, daemon=True)
             self._executor_thread.start()
+
+            # Allow brief time for DDS graph discovery to populate
+            time.sleep(0.2)
             return True
         except Exception as e:
             logging.error(f"Failed to initialize ROS 2 node: {e}")

@@ -438,14 +438,27 @@ class ROS2Manager:
     # Topic subscriptions
     # ------------------------------------------------------------------
 
-    def subscribe_topic(self, topic_name: str, topic_type_str: str, callback: Callable[[Any], None]) -> bool:
+    def subscribe_topic(
+        self,
+        topic_name: str,
+        topic_type_str: str,
+        callback: Callable[[Any], None],
+    ) -> Tuple[bool, str]:
         """
         Dynamically creates a subscription on the persistent node.
+        Returns (True, "") on success, or (False, error_message) on failure.
         In offline/demo mode, registers the callback without creating a real subscription.
         """
-        if not self.is_connected or not self.node or not ROSIDL_AVAILABLE:
+        if not self.is_connected or not self.node:
             self.topic_callbacks[topic_name] = callback
-            return True  # Registered (no real ROS traffic in demo mode)
+            return True, ""  # Demo mode — no real ROS traffic
+
+        if not ROSIDL_AVAILABLE:
+            return False, "rosidl_runtime_py is not available in this Python environment"
+
+        if not topic_type_str or topic_type_str in ("Unknown", ""):
+            return False, f"No type information available for topic '{topic_name}'"
+
         try:
             # Remove existing subscription if any
             if topic_name in self.active_subscriptions:
@@ -462,10 +475,12 @@ class ROS2Manager:
             sub = self.node.create_subscription(msg_class, topic_name, _wrapped_cb, 10)
             self.active_subscriptions[topic_name] = sub
             self.topic_callbacks[topic_name] = callback
-            return True
+            logging.info(f"Subscribed to {topic_name} [{topic_type_str}]")
+            return True, ""
         except Exception as e:
-            logging.error(f"Failed to subscribe to {topic_name}: {e}")
-            return False
+            err = f"{type(e).__name__}: {e}"
+            logging.error(f"Failed to subscribe to {topic_name}: {err}")
+            return False, err
 
     def unsubscribe_topic(self, topic_name: str):
         """Destroys subscription dynamically without leaking resources."""

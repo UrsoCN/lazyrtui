@@ -15,6 +15,7 @@ from typing import ClassVar, Any
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, Container, ScrollableContainer
+from textual.widget import Widget
 from textual.widgets import (
     Header,
     Footer,
@@ -158,45 +159,59 @@ TopicEchoCard {
 # ---------------------------------------------------------------------------
 # TopicEchoCard — a composable widget representing one monitored topic
 # ---------------------------------------------------------------------------
-class TopicEchoCard(Static):
+class TopicEchoCard(Widget):
     """
     A self-contained card widget that shows the latest message received
     on a single subscribed topic.
+    Inherits from Widget (not Static) so it can properly contain child widgets.
     """
 
     DEFAULT_CSS = """
     TopicEchoCard {
         height: auto;
+        min-height: 6;
         border: solid $primary;
         margin: 0 1 1 1;
-        padding: 0 1;
+        padding: 0 0 1 0;
     }
     """
+
+    # Reactive content — changing this automatically re-renders the Markdown body
+    _content: reactive[str] = reactive("_Waiting for first message..._")
 
     def __init__(self, topic_name: str, topic_type: str):
         super().__init__()
         self.topic_name = topic_name
         self.topic_type = topic_type
-        self._last_msg_str = "_Waiting for message..._"
 
     def compose(self) -> ComposeResult:
         with Horizontal(classes="echo-card-header"):
             yield Label(f"📡 {self.topic_name}", classes="echo-card-name")
-            yield Label(f"[{self.topic_type}]", classes="echo-card-type")
+            yield Label(f" [{self.topic_type}]", classes="echo-card-type")
             yield Button("✕", variant="error", id=f"btn-unsub-{self._safe_id()}", classes="echo-card-btn")
-        yield Markdown(self._last_msg_str, id=f"card-body-{self._safe_id()}")
+        yield Static(self._content, id=f"card-body-{self._safe_id()}")
 
     def _safe_id(self) -> str:
-        return self.topic_name.replace("/", "_").strip("_")
+        import re
+        safe = re.sub(r"[^a-zA-Z0-9_-]", "_", self.topic_name)
+        safe = re.sub(r"_+", "_", safe).strip("_")
+        if safe and safe[0].isdigit():
+            safe = "t_" + safe
+        return safe or "topic"
 
-    def update_message(self, msg_str: str) -> None:
-        """Called from background thread via call_from_thread."""
-        self._last_msg_str = msg_str
+    def watch__content(self, new_content: str) -> None:
+        """Automatically called by Textual when _content reactive changes."""
         try:
-            body = self.query_one(f"#card-body-{self._safe_id()}", Markdown)
-            body.update(f"```\n{msg_str}\n```")
+            self.query_one(f"#card-body-{self._safe_id()}", Static).update(new_content)
         except Exception:
             pass
+
+    def update_message(self, msg_str: str) -> None:
+        """
+        Thread-safe update: mutating a reactive attribute is safe to call
+        from any thread in Textual — it schedules a DOM update internally.
+        """
+        self._content = msg_str
 
 
 # ---------------------------------------------------------------------------
@@ -493,8 +508,9 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
             row_vals = table.get_row_at(table.cursor_coordinate.row)
         except Exception:
             return
-        topic_name = str(row_vals[0])
-        topic_type = str(row_vals[1]).split(",")[0].strip()
+        # col 0 = indicator, col 1 = actual topic name, col 2 = type(s)
+        topic_name = str(row_vals[1])
+        topic_type = str(row_vals[2]).split(",")[0].strip()
 
         if topic_name in self._echo_cards:
             # Already monitoring — remove card
@@ -517,14 +533,13 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
         monitor_list.mount(card)
 
         def _on_msg(msg: Any):
-            # Convert ROS message to a compact string
+            """ROS callback — runs in the rclpy spin thread."""
             try:
                 slots = getattr(msg, "__slots__", [])
                 d = {}
                 for slot in slots:
                     key = slot.lstrip("_")
                     val = getattr(msg, slot, getattr(msg, key, None))
-                    # Flatten nested objects one level
                     if hasattr(val, "__slots__"):
                         inner = {}
                         for s2 in getattr(val, "__slots__", []):
@@ -534,12 +549,21 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
                     else:
                         d[key] = val
                 msg_str = json.dumps(d, default=str, indent=2)
-            except Exception:
-                msg_str = str(msg)
+            except Exception as e:
+                msg_str = f"(parse error: {e})\n{str(msg)[:200]}"
 
+            # IMPORTANT: card._content is a Textual reactive — must be set on the
+            # main event-loop thread.  call_from_thread() schedules the lambda on
+            # the Textual event loop so the reactive watcher fires safely.
             self.call_from_thread(card.update_message, msg_str)
 
-        self.ros_manager.subscribe_topic(topic_name, topic_type, _on_msg)
+        ok, err = self.ros_manager.subscribe_topic(topic_name, topic_type, _on_msg)
+        if not ok:
+            card._content = (
+                f"⚠️ Cannot subscribe to `{topic_name}`\n\n"
+                f"> {err}\n\n"
+                "Make sure the interface package is sourced before launching LazyRTUI."
+            )
 
     def _remove_echo_card(self, topic_name: str) -> None:
         """Destroy the echo card and unsubscribe from the topic."""
@@ -713,7 +737,8 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
     def _update_topic_detail(self, table: DataTable, row_key) -> None:
         try:
             row_vals = table.get_row(row_key)
-            topic_name = str(row_vals[0])
+            # col 0 = indicator, col 1 = actual topic name, col 2 = type(s)
+            topic_name = str(row_vals[1])
             info = self.ros_manager.get_topic_info(topic_name)
             types_str = ", ".join(info.get("types", []))
             is_monitored = topic_name in self._echo_cards
@@ -878,14 +903,14 @@ Fill in the goal JSON payload below and press **`g`** or the button to send.
             "#table-nodes", nodes, ["Node Name", "Namespace"], "_cached_nodes"
         )
 
-        # Topics — add ★ indicator for monitored topics
+        # Topics — indicator column | name column | type column
         topics_raw = self.ros_manager.get_topics()
         topics = []
         for name, types in topics_raw:
             indicator = "📡" if name in self._echo_cards else " "
-            topics.append((indicator + " " + name, ", ".join(types)))
+            topics.append((indicator, name, ", ".join(types)))
         self._update_table_smart(
-            "#table-topics", topics, ["", "Type(s)"], "_cached_topics"
+            "#table-topics", topics, [" ", "Topic Name", "Type(s)"], "_cached_topics"
         )
 
         # Services

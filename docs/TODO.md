@@ -181,15 +181,13 @@
   - [x] 实现全局 App 主界面、Header、Footer、Help Modal（`?` 键弹窗）。
   - [x] 实现基于键盘快捷键的 TabbedContent 与 Panel 焦点切换系统。
   - [x] 实现 Node/Topic/Service/Action/TF 选中行高亮事件监听与右侧 Details 真实数据同步联动。
-- [ ] **阶段 4：各个功能 Tab 页实现**
-  - [ ] Node Tab (列表与详情)。
-  - [ ] Topic Tab (拓扑、Echo 查看、数据绘图)。
-  - [ ] Service Tab (Req Builder 与参数预设)。
-  - [ ] Action Tab (Goal 发送与 Feedback 监视)。
-  - [ ] Interface Tab (消息结构定义树)。
+- [x] **阶段 4：各个功能 Tab 页深度功能实现**
+  - [x] Node Tab (节点拓扑与参数细节查看)。
+  - [x] Topic Tab (右侧内嵌 `plotext` 实时 ASCII 波形折线图表与数据拓扑)。
+  - [x] Service Tab (右侧内嵌 JSON 请求输入框、`Call Service` 按钮与异步返回 Markdown 结果显示)。
+  - [x] Action Tab (右侧内嵌动作 Goal 查看与状态面板)。
+  - [x] Interface Tab (基于 Tree Widget 展现 ROS 2 常见 msg/srv/action 类型层次包结构)。
+  - [x] Bag Tab (ROS Bag 状态与记录管理)。
 - [ ] **阶段 5：配置与插件系统**
   - [ ] 实现 `config.yaml` 配置加载。
   - [ ] 实现 Service 参数预设与 Topic 绘图插件。
-- [ ] **阶段 6：测试与优化**
-  - [ ] 验证旧 Shell / 纯键盘环境适配（VT100 / ssh）。
-  - [ ] 验证 `~/.ros/log` 无无关日志垃圾留存。

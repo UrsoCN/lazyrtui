@@ -548,7 +548,7 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
                         d[key] = inner
                     else:
                         d[key] = val
-                msg_str = json.dumps(d, default=str, indent=2)
+                msg_str = json.dumps(d, default=str, indent=2, ensure_ascii=False)
             except Exception as e:
                 msg_str = f"(parse error: {e})\n{str(msg)[:200]}"
 
@@ -628,7 +628,7 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
         def _on_result(success: bool, result: Any, duration: str):
             if success:
                 try:
-                    result_str = json.dumps(result, indent=2, default=str)
+                    result_str = json.dumps(result, indent=2, default=str, ensure_ascii=False)
                 except Exception:
                     result_str = str(result)
                 msg = f"✅ **Success** — `{srv_name}` (took `{duration}`)\n\n```json\n{result_str}\n```"
@@ -678,7 +678,7 @@ bypassing TUI capture. Then `Ctrl+Shift+C` to copy.
         def _on_result(success: bool, result: Any, duration: str):
             if success:
                 try:
-                    result_str = json.dumps(result, indent=2, default=str)
+                    result_str = json.dumps(result, indent=2, default=str, ensure_ascii=False)
                 except Exception:
                     result_str = str(result)
                 msg = f"✅ **Goal Accepted** — `{act_name}` (took `{duration}`)\n\n```json\n{result_str}\n```"

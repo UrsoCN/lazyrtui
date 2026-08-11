@@ -14,6 +14,10 @@
 #include <chrono>
 #include <sstream>
 
+#ifndef LAZYRTUI_VERSION
+#define LAZYRTUI_VERSION "0.1.0"
+#endif
+
 using namespace ftxui;
 
 namespace lazyrtui {
@@ -420,7 +424,7 @@ Component LazyRTUIApp::make_about_tab() {
     auto left_pane = Renderer([]() {
         return window(text("About"), 
             vbox({
-                text("LazyRTUI v0.1.0") | bold,
+                text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
                 text("ROS 2 Distro: Unknown"),
                 separator(),
                 text("Keybindings:"),
@@ -478,7 +482,7 @@ void LazyRTUIApp::run() {
     auto renderer = Renderer(main_container, [this, tab_toggle, tab_container]() {
         // Header
         auto header = hbox({
-            text(" LazyRTUI v0.1.0 ") | bold | inverted,
+            text(" LazyRTUI v" LAZYRTUI_VERSION " ") | bold | inverted,
             text(" "),
             tab_toggle->Render() | flex,
             text(" "),

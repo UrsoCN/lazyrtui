@@ -1,5 +1,46 @@
 cmake_minimum_required(VERSION 3.14)
-project(lazyrtui VERSION 0.1.0)
+
+# ── Version: MAJOR.MINOR.YYMMDD from git tag and latest commit date ──
+execute_process(
+    COMMAND git describe --tags --abbrev=0
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_TAG_RAW
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(GIT_TAG_RAW)
+    string(REGEX REPLACE "^[vV]" "" GIT_TAG_CLEAN "${GIT_TAG_RAW}")
+    string(REPLACE "." ";" GIT_TAG_LIST "${GIT_TAG_CLEAN}")
+    list(LENGTH GIT_TAG_LIST LIST_LEN)
+    if(LIST_LEN GREATER_EQUAL 2)
+        list(GET GIT_TAG_LIST 0 MAJOR_VER)
+        list(GET GIT_TAG_LIST 1 MINOR_VER)
+        set(MAJOR_MINOR "${MAJOR_VER}.${MINOR_VER}")
+    elseif(LIST_LEN EQUAL 1)
+        list(GET GIT_TAG_LIST 0 MAJOR_VER)
+        set(MAJOR_MINOR "${MAJOR_VER}.0")
+    else()
+        set(MAJOR_MINOR "0.1")
+    endif()
+else()
+    set(MAJOR_MINOR "0.1")
+endif()
+
+execute_process(
+    COMMAND git log -1 --format=%cd --date=format:%y%m%d
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE GIT_COMMIT_DATE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT GIT_COMMIT_DATE OR GIT_COMMIT_DATE STREQUAL "")
+    set(GIT_COMMIT_DATE "000000")
+endif()
+
+set(PROJECT_VER "${MAJOR_MINOR}.${GIT_COMMIT_DATE}")
+message(STATUS "Project version: ${PROJECT_VER}")
+
+project(lazyrtui VERSION ${PROJECT_VER})
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -26,6 +67,8 @@ add_executable(lazyrtui
   src/config_loader.cpp
   src/tf_tree.cpp
 )
+
+target_compile_definitions(lazyrtui PRIVATE LAZYRTUI_VERSION="${PROJECT_VER}")
 
 target_include_directories(lazyrtui PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

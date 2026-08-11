@@ -2,6 +2,8 @@
 #include "lazyrtui/ros_manager.hpp"
 #include "lazyrtui/config_loader.hpp"
 #include "lazyrtui/tf_tree.hpp"
+#include "lazyrtui/python_plugin_engine.hpp"
+#include "lazyrtui/ftxui_converter.hpp"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -12,6 +14,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <iostream>
 #include <sstream>
 
 #ifndef LAZYRTUI_VERSION
@@ -35,6 +39,34 @@ LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config& con
     topics_menu_labels_ = {"[ ] /turtle1/cmd_vel [geometry_msgs/msg/Twist]", "[ ] /turtle1/pose [turtlesim/msg/Pose]"};
     services_list_ = {"/clear [std_srvs/srv/Empty]", "/spawn [turtlesim/srv/Spawn]"};
     actions_list_ = {"/turtle1/rotate_absolute [turtlesim/action/RotateAbsolute]"};
+
+    // Initialize Python Topic Plugin Engine
+    python_plugin_engine_ = std::make_unique<PythonPluginEngine>();
+    const char* home = std::getenv("HOME");
+    if (home) {
+        python_plugin_engine_->load_plugins_from_dir(std::string(home) + "/.config/lazyrtui/plugins");
+    }
+    python_plugin_engine_->load_plugins_from_dir("./config/plugins");
+    python_plugin_engine_->load_plugins_from_dir("./plugins");
+
+    const char* plugin_path = std::getenv("LAZYRTUI_PLUGIN_PATH");
+    if (plugin_path) {
+        std::string path_str(plugin_path);
+        size_t pos = 0;
+        while ((pos = path_str.find(':')) != std::string::npos) {
+            std::string dir = path_str.substr(0, pos);
+            if (!dir.empty()) python_plugin_engine_->load_plugins_from_dir(dir);
+            path_str.erase(0, pos + 1);
+        }
+        if (!path_str.empty()) python_plugin_engine_->load_plugins_from_dir(path_str);
+    }
+
+    if (!python_plugin_engine_->loaded_plugins().empty()) {
+        std::cerr << "[lazyrtui] Loaded " << python_plugin_engine_->loaded_plugins().size() << " Python topic plugin(s):\n";
+        for (const auto& p : python_plugin_engine_->loaded_plugins()) {
+            std::cerr << "  - " << p.name << " (" << p.file_path << ")\n";
+        }
+    }
 }
 
 LazyRTUIApp::~LazyRTUIApp() {
@@ -259,25 +291,57 @@ Component LazyRTUIApp::make_topics_tab() {
         for (const auto& topic_name : subscribed_topics_) {
             Elements msgs;
             auto detail = ros_mgr_ ? ros_mgr_->get_topic_info(topic_name) : TopicDetail{};
-            msgs.push_back(text("Type: " + (detail.type.empty() ? "Unknown" : detail.type)) | dim);
-            msgs.push_back(text("Publishers: " + std::to_string(detail.publisher_count) + 
-                                " | Subscribers: " + std::to_string(detail.subscriber_count)) | dim);
-            msgs.push_back(separator());
 
-            auto it = topic_messages_map_.find(topic_name);
-            if (it != topic_messages_map_.end() && !it->second.empty()) {
-                for (const auto& m : it->second) {
-                    std::stringstream ss(m);
-                    std::string line;
-                    while (std::getline(ss, line)) {
-                        msgs.push_back(text(line));
-                    }
-                }
-            } else {
-                msgs.push_back(text("Waiting for messages...") | dim);
+            std::string py_module;
+            if (python_plugin_engine_) {
+                py_module = python_plugin_engine_->find_matching_plugin(topic_name, detail.type);
             }
 
-            topic_windows.push_back(window(text(" Echo: " + topic_name + " "), vbox(msgs)) | flex);
+            if (!py_module.empty()) {
+                // Rendered via Python Plugin
+                auto it = topic_messages_map_.find(topic_name);
+                if (it != topic_messages_map_.end() && !it->second.empty()) {
+                    const std::string& raw = it->second.back();
+                    std::string json_body;
+                    if (raw.size() > 11 && raw[0] == '[' && raw[9] == ']') {
+                        json_body = raw.substr(11);
+                    } else {
+                        json_body = raw;
+                    }
+
+                    nlohmann::json ui_spec = python_plugin_engine_->render_message(py_module, topic_name, json_body);
+                    auto plugin_els = FTXUIConverter::parse_ui_spec(ui_spec);
+                    for (auto& el : plugin_els) {
+                        msgs.push_back(std::move(el));
+                    }
+                } else {
+                    msgs.push_back(text("Waiting for messages...") | dim);
+                }
+
+                std::string win_title = " " + topic_name + " [" + py_module + ".py] ";
+                topic_windows.push_back(window(text(win_title), vbox(msgs)) | flex);
+            } else {
+                // Default raw topic renderer
+                msgs.push_back(text("Type: " + (detail.type.empty() ? "Unknown" : detail.type)) | dim);
+                msgs.push_back(text("Publishers: " + std::to_string(detail.publisher_count) + 
+                                    " | Subscribers: " + std::to_string(detail.subscriber_count)) | dim);
+                msgs.push_back(separator());
+
+                auto it = topic_messages_map_.find(topic_name);
+                if (it != topic_messages_map_.end() && !it->second.empty()) {
+                    for (const auto& m : it->second) {
+                        std::stringstream ss(m);
+                        std::string line;
+                        while (std::getline(ss, line)) {
+                            msgs.push_back(text(line));
+                        }
+                    }
+                } else {
+                    msgs.push_back(text("Waiting for messages...") | dim);
+                }
+
+                topic_windows.push_back(window(text(" Echo: " + topic_name + " "), vbox(msgs)) | flex);
+            }
         }
 
         return window(text("Live Topic Echoes (" + std::to_string(subscribed_topics_.size()) + " active)"), 

@@ -49,6 +49,8 @@ add_subdirectory(third_party/FTXUI_v7.0.3)
 add_subdirectory(third_party/yaml-cpp_0.9.0)
 add_subdirectory(third_party/nlohmann_json_v3.12.0)
 
+find_package(Python3 COMPONENTS Development REQUIRED)
+
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -66,6 +68,8 @@ add_executable(lazyrtui
   src/ros_manager.cpp
   src/config_loader.cpp
   src/tf_tree.cpp
+  src/python_plugin_engine.cpp
+  src/ftxui_converter.cpp
 )
 
 target_compile_definitions(lazyrtui PRIVATE LAZYRTUI_VERSION="${PROJECT_VER}")
@@ -73,6 +77,7 @@ target_compile_definitions(lazyrtui PRIVATE LAZYRTUI_VERSION="${PROJECT_VER}")
 target_include_directories(lazyrtui PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${Python3_INCLUDE_DIRS}
 )
 
 target_link_libraries(lazyrtui
@@ -81,6 +86,7 @@ target_link_libraries(lazyrtui
   ftxui::component
   yaml-cpp
   nlohmann_json::nlohmann_json
+  ${Python3_LIBRARIES}
 )
 
 ament_target_dependencies(lazyrtui

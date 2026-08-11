@@ -11,6 +11,7 @@
 #include <set>
 
 #include "lazyrtui/config_loader.hpp"
+#include "lazyrtui/python_plugin_engine.hpp"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -25,6 +26,8 @@ public:
     LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config& config);
     ~LazyRTUIApp();
     void run();
+
+    PythonPluginEngine* python_plugin_engine() { return python_plugin_engine_.get(); }
 
 private:
     // Tab component builders
@@ -96,6 +99,9 @@ private:
     // TF tab state
     int selected_tf_ = 0;
     int tf_pane_focus_ = 0;
+
+    // Python Topic Plugin Engine
+    std::unique_ptr<PythonPluginEngine> python_plugin_engine_;
 };
 
 } // namespace lazyrtui

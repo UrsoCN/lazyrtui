@@ -8,6 +8,7 @@
 #include <atomic>
 #include <thread>
 #include <map>
+#include <set>
 
 #include "lazyrtui/config_loader.hpp"
 
@@ -36,6 +37,8 @@ private:
     ftxui::Component make_tf_tab();
     ftxui::Component make_about_tab();
 
+    void toggle_topic_subscription(int index);
+
     // UI state
     int selected_tab_ = 0;
     std::vector<std::string> tab_names_;
@@ -60,6 +63,7 @@ private:
     mutable std::mutex data_mutex_;
     std::vector<std::string> nodes_list_;
     std::vector<std::string> topics_list_;
+    std::vector<std::string> topics_menu_labels_;
     std::vector<std::string> services_list_;
     std::vector<std::string> actions_list_;
     
@@ -67,12 +71,11 @@ private:
     int selected_node_ = 0;
     int node_pane_focus_ = 0; // 0=left, 1=right
     
-    // Topic tab state
+    // Topic tab state (Multi-topic subscription support)
     int selected_topic_ = 0;
     int topic_pane_focus_ = 0;
-    std::vector<std::string> topic_messages_;
-    bool is_echoing_ = false;
-    std::string current_subscribed_topic_;
+    std::set<std::string> subscribed_topics_;
+    std::map<std::string, std::vector<std::string>> topic_messages_map_;
 
     // Service tab state
     int selected_service_ = 0;

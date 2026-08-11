@@ -235,6 +235,330 @@ std::string ROS2Manager::get_action_goal_json(const std::string& action_name, co
     return "{\n  \"message\": \"Dynamic goal introspection not fully implemented yet\"\n}";
 }
 
+#include <dlfcn.h>
+#include <cmath>
+#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
+#include <rosidl_typesupport_introspection_cpp/field_types.hpp>
+
+struct TypeSupportHandleInfo {
+    void* lib_handle = nullptr;
+    const ::rosidl_typesupport_introspection_cpp::MessageMembers* members = nullptr;
+};
+
+static std::map<std::string, TypeSupportHandleInfo> g_typesupport_cache;
+static std::mutex g_typesupport_mutex;
+
+static const ::rosidl_typesupport_introspection_cpp::MessageMembers* get_message_members(const std::string& type_str) {
+    std::lock_guard<std::mutex> lock(g_typesupport_mutex);
+    auto it = g_typesupport_cache.find(type_str);
+    if (it != g_typesupport_cache.end()) {
+        return it->second.members;
+    }
+
+    std::string pkg, msg_name;
+    size_t slash1 = type_str.find('/');
+    if (slash1 != std::string::npos) {
+        pkg = type_str.substr(0, slash1);
+        size_t slash2 = type_str.find('/', slash1 + 1);
+        if (slash2 != std::string::npos) {
+            msg_name = type_str.substr(slash2 + 1);
+        } else {
+            msg_name = type_str.substr(slash1 + 1);
+        }
+    } else {
+        return nullptr;
+    }
+
+    std::string lib_name = "lib" + pkg + "__rosidl_typesupport_introspection_cpp.so";
+    void* handle = dlopen(lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+    if (!handle) {
+        lib_name = "lib" + pkg + "__rosidl_typesupport_c.so";
+        handle = dlopen(lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+    }
+    if (!handle) {
+        return nullptr;
+    }
+
+    std::string sym_name = "rosidl_typesupport_introspection_cpp__get_message_type_support_handle__" + pkg + "__msg__" + msg_name;
+    using GetTSFn = const rosidl_message_type_support_t* (*)();
+    GetTSFn get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
+    if (!get_ts_fn) {
+        sym_name = "rosidl_typesupport_c__get_message_type_support_handle__" + pkg + "__msg__" + msg_name;
+        get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
+    }
+
+    if (!get_ts_fn) {
+        dlclose(handle);
+        return nullptr;
+    }
+
+    const rosidl_message_type_support_t* ts = get_ts_fn();
+    if (!ts || !ts->data) {
+        dlclose(handle);
+        return nullptr;
+    }
+
+    const auto* members = static_cast<const ::rosidl_typesupport_introspection_cpp::MessageMembers*>(ts->data);
+    g_typesupport_cache[type_str] = {handle, members};
+    return members;
+}
+
+static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
+                            const uint8_t* buffer, size_t size, size_t& offset,
+                            std::stringstream& ss, int indent_level);
+
+static bool parse_cdr_members(const ::rosidl_typesupport_introspection_cpp::MessageMembers* members,
+                             const uint8_t* buffer, size_t size, size_t& offset,
+                             std::stringstream& ss, int indent_level) {
+    if (!members) return false;
+    std::string indent(indent_level * 2, ' ');
+    ss << "{\n";
+    for (uint32_t i = 0; i < members->member_count_; ++i) {
+        const auto& member = members->members_[i];
+        if (i > 0) ss << ",\n";
+        ss << indent << "  \"" << member.name_ << "\": ";
+        if (!parse_cdr_field(member, buffer, size, offset, ss, indent_level + 1)) {
+            ss << "null";
+        }
+    }
+    ss << "\n" << indent << "}";
+    return true;
+}
+
+static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
+                            const uint8_t* buffer, size_t size, size_t& offset,
+                            std::stringstream& ss, int indent_level) {
+    using namespace rosidl_typesupport_introspection_cpp;
+
+    auto align_offset = [&](size_t align) {
+        while (offset % align != 0 && offset < size) offset++;
+    };
+
+    if (member.is_array_) {
+        align_offset(4);
+        uint32_t count = member.array_size_;
+        if (!member.is_upper_bound_ && count == 0) {
+            if (offset + 4 > size) return false;
+            std::memcpy(&count, buffer + offset, 4);
+            offset += 4;
+        }
+
+        ss << "[";
+        if (count > 20) count = 20;
+        for (uint32_t j = 0; j < count; ++j) {
+            if (j > 0) ss << ", ";
+            ::rosidl_typesupport_introspection_cpp::MessageMember elem_member = member;
+            elem_member.is_array_ = false;
+            elem_member.array_size_ = 0;
+            if (!parse_cdr_field(elem_member, buffer, size, offset, ss, indent_level)) {
+                ss << "null";
+            }
+        }
+        ss << "]";
+        return true;
+    }
+
+    switch (member.type_id_) {
+        case ROS_TYPE_BOOLEAN: {
+            if (offset >= size) return false;
+            bool val = (buffer[offset] != 0);
+            offset += 1;
+            ss << (val ? "true" : "false");
+            return true;
+        }
+        case ROS_TYPE_UINT8: {
+            if (offset >= size) return false;
+            uint8_t val = buffer[offset];
+            offset += 1;
+            ss << (int)val;
+            return true;
+        }
+        case ROS_TYPE_INT8:
+        case ROS_TYPE_CHAR: {
+            if (offset >= size) return false;
+            int8_t val = static_cast<int8_t>(buffer[offset]);
+            offset += 1;
+            ss << (int)val;
+            return true;
+        }
+        case ROS_TYPE_UINT16: {
+            align_offset(2);
+            if (offset + 2 > size) return false;
+            uint16_t val = 0;
+            std::memcpy(&val, buffer + offset, 2);
+            offset += 2;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_INT16: {
+            align_offset(2);
+            if (offset + 2 > size) return false;
+            int16_t val = 0;
+            std::memcpy(&val, buffer + offset, 2);
+            offset += 2;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_UINT32: {
+            align_offset(4);
+            if (offset + 4 > size) return false;
+            uint32_t val = 0;
+            std::memcpy(&val, buffer + offset, 4);
+            offset += 4;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_INT32: {
+            align_offset(4);
+            if (offset + 4 > size) return false;
+            int32_t val = 0;
+            std::memcpy(&val, buffer + offset, 4);
+            offset += 4;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_UINT64: {
+            align_offset(8);
+            if (offset + 8 > size) return false;
+            uint64_t val = 0;
+            std::memcpy(&val, buffer + offset, 8);
+            offset += 8;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_INT64: {
+            align_offset(8);
+            if (offset + 8 > size) return false;
+            int64_t val = 0;
+            std::memcpy(&val, buffer + offset, 8);
+            offset += 8;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_FLOAT: {
+            align_offset(4);
+            if (offset + 4 > size) return false;
+            float val = 0;
+            std::memcpy(&val, buffer + offset, 4);
+            offset += 4;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_DOUBLE: {
+            align_offset(8);
+            if (offset + 8 > size) return false;
+            double val = 0;
+            std::memcpy(&val, buffer + offset, 8);
+            offset += 8;
+            ss << val;
+            return true;
+        }
+        case ROS_TYPE_STRING: {
+            align_offset(4);
+            if (offset + 4 > size) return false;
+            uint32_t len = 0;
+            std::memcpy(&len, buffer + offset, 4);
+            offset += 4;
+            if (len > 0 && offset + len <= size) {
+                std::string str_val(reinterpret_cast<const char*>(buffer + offset), (buffer[offset + len - 1] == '\0') ? len - 1 : len);
+                offset += len;
+                ss << "\"" << str_val << "\"";
+                return true;
+            } else if (len == 0) {
+                ss << "\"\"";
+                return true;
+            }
+            return false;
+        }
+        case ROS_TYPE_MESSAGE: {
+            if (member.members_ && member.members_->data) {
+                const auto* sub_members = static_cast<const ::rosidl_typesupport_introspection_cpp::MessageMembers*>(member.members_->data);
+                return parse_cdr_members(sub_members, buffer, size, offset, ss, indent_level);
+            }
+            return false;
+        }
+        default:
+            return false;
+    }
+}
+
+static std::string format_serialized_message(const std::string& type_str, const rclcpp::SerializedMessage& serialized_msg) {
+    auto now = std::chrono::system_clock::now();
+    auto now_c = std::chrono::system_clock::to_time_t(now);
+    char time_buf[32];
+    std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&now_c));
+
+    const uint8_t* buffer = static_cast<const uint8_t*>(serialized_msg.get_rcl_serialized_message().buffer);
+    size_t size = serialized_msg.size();
+
+    std::stringstream ss;
+    ss << "[" << time_buf << "] ";
+
+    if (size < 4) {
+        ss << "{ \"data\": null }";
+        return ss.str();
+    }
+
+    const auto* members = get_message_members(type_str);
+    if (members) {
+        size_t offset = 4; // Skip 4-byte CDR header
+        std::stringstream json_ss;
+        if (parse_cdr_members(members, buffer, size, offset, json_ss, 0)) {
+            ss << json_ss.str();
+            return ss.str();
+        }
+    }
+
+    // Generic CDR inspection fallback if typesupport library unavailable
+    size_t offset = 4;
+    int field_idx = 1;
+    ss << "{\n";
+    bool first = true;
+    while (offset < size && field_idx <= 16) {
+        if (offset + 4 <= size) {
+            uint32_t len = 0;
+            std::memcpy(&len, buffer + offset, 4);
+            if (len > 0 && len < 2048 && offset + 4 + len <= size) {
+                bool valid_ascii = true;
+                for (size_t i = 0; i < len - 1; ++i) {
+                    char c = buffer[offset + 4 + i];
+                    if (c < 32 || c > 126) {
+                        if (c != '\n' && c != '\r' && c != '\t') { valid_ascii = false; break; }
+                    }
+                }
+                if (valid_ascii && (buffer[offset + 4 + len - 1] == '\0' || len == 1)) {
+                    std::string str_val(reinterpret_cast<const char*>(buffer + offset + 4), (buffer[offset + 4 + len - 1] == '\0') ? len - 1 : len);
+                    if (!str_val.empty()) {
+                        if (!first) ss << ",\n";
+                        ss << "  \"str_" << field_idx++ << "\": \"" << str_val << "\"";
+                        first = false;
+                    }
+                    offset += 4 + len;
+                    while (offset % 4 != 0 && offset < size) offset++;
+                    continue;
+                }
+            }
+        }
+
+        uint8_t byte_val = buffer[offset];
+        if (byte_val == 0 || byte_val == 1) {
+            if (!first) ss << ",\n";
+            ss << "  \"flag_" << field_idx++ << "\": " << (byte_val ? "true" : "false");
+            first = false;
+            offset += 1;
+            while (offset % 4 != 0 && offset < size) offset++;
+            continue;
+        }
+
+        offset += 1;
+    }
+    if (first) {
+        ss << "  \"payload_bytes\": " << size;
+    }
+    ss << "\n}";
+    return ss.str();
+}
+
 bool ROS2Manager::subscribe_topic(const std::string& topic, const std::string& type_str, TopicCallback callback) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!connected_ || !impl_->node_) return false;
@@ -255,27 +579,8 @@ bool ROS2Manager::subscribe_topic(const std::string& topic, const std::string& t
         }
 
         auto cb = [topic, type_str, callback](std::shared_ptr<rclcpp::SerializedMessage> msg) {
-            auto now = std::chrono::system_clock::now();
-            auto now_c = std::chrono::system_clock::to_time_t(now);
-            char time_buf[32];
-            std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&now_c));
-
-            std::stringstream ss;
-            ss << "[" << time_buf << "] ";
-            if ((type_str == "std_msgs/msg/String" || type_str == "std_msgs/String") && msg->size() >= 8) {
-                const uint8_t* data = static_cast<const uint8_t*>(msg->get_rcl_serialized_message().buffer);
-                uint32_t len = 0;
-                std::memcpy(&len, data + 4, sizeof(uint32_t));
-                if (len > 0 && 8 + len <= msg->size()) {
-                    std::string str_content(reinterpret_cast<const char*>(data + 8), (data[8 + len - 1] == '\0') ? len - 1 : len);
-                    ss << "{ \"data\": \"" << str_content << "\" }";
-                } else {
-                    ss << "{ \"size\": " << msg->size() << " bytes }";
-                }
-            } else {
-                ss << "{ \"type\": \"" << type_str << "\", \"size\": " << msg->size() << " bytes }";
-            }
-            callback(topic, ss.str());
+            std::string formatted = format_serialized_message(type_str, *msg);
+            callback(topic, formatted);
         };
 
         auto sub = impl_->node_->create_generic_subscription(topic, type_str, qos, cb);

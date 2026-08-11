@@ -244,14 +244,41 @@ bool ROS2Manager::subscribe_topic(const std::string& topic, const std::string& t
     }
 
     try {
-        auto cb = [this, topic, callback](std::shared_ptr<rclcpp::SerializedMessage> msg) {
+        rclcpp::QoS qos(10);
+        auto pub_info = impl_->node_->get_publishers_info_by_topic(topic);
+        if (!pub_info.empty()) {
+            const auto& qos_profile = pub_info.front().qos_profile();
+            qos.reliability(qos_profile.reliability());
+            qos.durability(qos_profile.durability());
+        } else {
+            qos.best_effort();
+        }
+
+        auto cb = [topic, type_str, callback](std::shared_ptr<rclcpp::SerializedMessage> msg) {
+            auto now = std::chrono::system_clock::now();
+            auto now_c = std::chrono::system_clock::to_time_t(now);
+            char time_buf[32];
+            std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", std::localtime(&now_c));
+
             std::stringstream ss;
-            ss << "{ \"_info\": \"Raw serialized message data\", \"size\": " << msg->size() << " }";
-            // TODO: Implement full rosidl_typesupport_introspection_cpp
+            ss << "[" << time_buf << "] ";
+            if ((type_str == "std_msgs/msg/String" || type_str == "std_msgs/String") && msg->size() >= 8) {
+                const uint8_t* data = static_cast<const uint8_t*>(msg->get_rcl_serialized_message().buffer);
+                uint32_t len = 0;
+                std::memcpy(&len, data + 4, sizeof(uint32_t));
+                if (len > 0 && 8 + len <= msg->size()) {
+                    std::string str_content(reinterpret_cast<const char*>(data + 8), (data[8 + len - 1] == '\0') ? len - 1 : len);
+                    ss << "{ \"data\": \"" << str_content << "\" }";
+                } else {
+                    ss << "{ \"size\": " << msg->size() << " bytes }";
+                }
+            } else {
+                ss << "{ \"type\": \"" << type_str << "\", \"size\": " << msg->size() << " bytes }";
+            }
             callback(topic, ss.str());
         };
 
-        auto sub = impl_->node_->create_generic_subscription(topic, type_str, rclcpp::QoS(10), cb);
+        auto sub = impl_->node_->create_generic_subscription(topic, type_str, qos, cb);
         impl_->subscriptions_[topic] = sub;
         return true;
     } catch (const std::exception& e) {

@@ -72,6 +72,7 @@ private:
     int topic_pane_focus_ = 0;
     std::vector<std::string> topic_messages_;
     bool is_echoing_ = false;
+    std::string current_subscribed_topic_;
 
     // Service tab state
     int selected_service_ = 0;

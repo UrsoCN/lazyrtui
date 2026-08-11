@@ -34,6 +34,9 @@ LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config& con
 
 LazyRTUIApp::~LazyRTUIApp() {
     stop_refresh_timer();
+    if (ros_mgr_ && !current_subscribed_topic_.empty()) {
+        ros_mgr_->unsubscribe_topic(current_subscribed_topic_);
+    }
 }
 
 void LazyRTUIApp::start_refresh_timer() {
@@ -106,21 +109,57 @@ Component LazyRTUIApp::make_nodes_tab() {
     });
 
     auto right_pane = Renderer([this]() {
+        std::lock_guard<std::mutex> lock(data_mutex_);
         std::string selected = (selected_node_ >= 0 && selected_node_ < (int)nodes_list_.size()) 
                                 ? nodes_list_[selected_node_] : "None";
         
-        return window(text("Node Details: " + selected), 
-            vbox({
-                text("Publishers:") | bold,
-                text("  - /rosout [rcl_interfaces/msg/Log]"),
-                separator(),
-                text("Subscribers:") | bold,
-                text("  - /parameter_events [rcl_interfaces/msg/ParameterEvent]"),
-                separator(),
-                text("Services:") | bold,
-                text("  - /describe_parameters [rcl_interfaces/srv/DescribeParameters]")
-            })
-        ) | (node_pane_focus_ == 1 ? borderLight : borderEmpty);
+        Elements items;
+        if (selected != "None" && ros_mgr_) {
+            std::string name = selected;
+            std::string ns = "/";
+            size_t last_slash = selected.find_last_of('/');
+            if (last_slash != std::string::npos && last_slash > 0) {
+                ns = selected.substr(0, last_slash);
+                name = selected.substr(last_slash + 1);
+            } else if (last_slash == 0) {
+                name = selected.substr(1);
+            }
+            auto detail = ros_mgr_->get_node_info(name, ns);
+            
+            items.push_back(text("Publishers:") | bold);
+            if (detail.publishers.empty()) {
+                items.push_back(text("  (None)") | dim);
+            } else {
+                for (const auto& [t, type] : detail.publishers) {
+                    items.push_back(text("  - " + t + " [" + type + "]"));
+                }
+            }
+            items.push_back(separator());
+
+            items.push_back(text("Subscribers:") | bold);
+            if (detail.subscribers.empty()) {
+                items.push_back(text("  (None)") | dim);
+            } else {
+                for (const auto& [t, type] : detail.subscribers) {
+                    items.push_back(text("  - " + t + " [" + type + "]"));
+                }
+            }
+            items.push_back(separator());
+
+            items.push_back(text("Services:") | bold);
+            if (detail.services.empty()) {
+                items.push_back(text("  (None)") | dim);
+            } else {
+                for (const auto& [s, type] : detail.services) {
+                    items.push_back(text("  - " + s + " [" + type + "]"));
+                }
+            }
+        } else {
+            items.push_back(text("No node selected"));
+        }
+
+        return window(text("Node Details: " + selected), vbox(items)) 
+               | (node_pane_focus_ == 1 ? borderLight : borderEmpty);
     });
 
     auto container = Container::Horizontal({left_pane, right_pane}, &node_pane_focus_);
@@ -142,26 +181,64 @@ Component LazyRTUIApp::make_topics_tab() {
     });
 
     auto right_pane = Renderer([this]() {
+        std::lock_guard<std::mutex> lock(data_mutex_);
         std::string selected = (selected_topic_ >= 0 && selected_topic_ < (int)topics_list_.size()) 
                                 ? topics_list_[selected_topic_] : "None";
         
         Elements msgs;
+        if (selected != "None") {
+            size_t pos = selected.find(" [");
+            if (pos != std::string::npos) {
+                std::string topic_name = selected.substr(0, pos);
+                std::string type_str = selected.substr(pos + 2);
+                if (!type_str.empty() && type_str.back() == ']') type_str.pop_back();
+
+                if (ros_mgr_) {
+                    auto detail = ros_mgr_->get_topic_info(topic_name);
+                    msgs.push_back(text("Type: " + (detail.type.empty() ? type_str : detail.type)) | dim);
+                    msgs.push_back(text("Publishers: " + std::to_string(detail.publisher_count) + 
+                                        " | Subscribers: " + std::to_string(detail.subscriber_count)) | dim);
+                    msgs.push_back(separator());
+                }
+
+                if (is_echoing_ && topic_name != current_subscribed_topic_) {
+                    if (ros_mgr_ && !current_subscribed_topic_.empty()) {
+                        ros_mgr_->unsubscribe_topic(current_subscribed_topic_);
+                    }
+                    current_subscribed_topic_ = topic_name;
+                    topic_messages_.clear();
+                    if (ros_mgr_) {
+                        ros_mgr_->subscribe_topic(topic_name, type_str, [this](const std::string& t, const std::string& msg) {
+                            std::lock_guard<std::mutex> lock(data_mutex_);
+                            if (topic_messages_.size() > 50) {
+                                topic_messages_.erase(topic_messages_.begin());
+                            }
+                            topic_messages_.push_back(msg);
+                            if (screen_) {
+                                screen_->PostEvent(Event::Custom);
+                            }
+                        });
+                    }
+                }
+            }
+        }
+
         if (is_echoing_) {
-            msgs.push_back(text("Status: Subscribed") | color(Color::Yellow));
+            msgs.push_back(text("Status: Subscribed (" + current_subscribed_topic_ + ")") | color(Color::Green));
+            msgs.push_back(separator());
             for (const auto& m : topic_messages_) {
                 msgs.push_back(text(m));
             }
             if (topic_messages_.empty()) {
-                msgs.push_back(text("Waiting for messages..."));
+                msgs.push_back(text("Waiting for messages...") | dim);
             }
         } else {
             msgs.push_back(text("Status: Not Subscribed") | color(Color::GrayDark));
-            msgs.push_back(text("Press 'e' to echo."));
+            msgs.push_back(text("Press 'e' to start/stop echoing messages."));
         }
 
-        return window(text("Topic Echo: " + selected), 
-            vbox(msgs)
-        ) | (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
+        return window(text("Topic Echo: " + selected), vbox(msgs)) 
+               | (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
     });
 
     auto container = Container::Horizontal({left_pane, right_pane}, &topic_pane_focus_);
@@ -483,10 +560,39 @@ void LazyRTUIApp::run() {
         }
         
         if (e == Event::Character('e') && selected_tab_ == 1) {
+            std::lock_guard<std::mutex> lock(data_mutex_);
             is_echoing_ = !is_echoing_;
             if (is_echoing_) {
                 topic_messages_.clear();
-                topic_messages_.push_back("{ \"data\": \"hello\" }");
+                if (selected_topic_ >= 0 && selected_topic_ < (int)topics_list_.size()) {
+                    std::string full_str = topics_list_[selected_topic_];
+                    size_t pos = full_str.find(" [");
+                    if (pos != std::string::npos) {
+                        std::string topic_name = full_str.substr(0, pos);
+                        std::string type_str = full_str.substr(pos + 2);
+                        if (!type_str.empty() && type_str.back() == ']') type_str.pop_back();
+
+                        current_subscribed_topic_ = topic_name;
+                        if (ros_mgr_) {
+                            ros_mgr_->subscribe_topic(topic_name, type_str, [this](const std::string& t, const std::string& msg) {
+                                std::lock_guard<std::mutex> lock(data_mutex_);
+                                if (topic_messages_.size() > 50) {
+                                    topic_messages_.erase(topic_messages_.begin());
+                                }
+                                topic_messages_.push_back(msg);
+                                if (screen_) {
+                                    screen_->PostEvent(Event::Custom);
+                                }
+                            });
+                        }
+                    }
+                }
+            } else {
+                if (ros_mgr_ && !current_subscribed_topic_.empty()) {
+                    ros_mgr_->unsubscribe_topic(current_subscribed_topic_);
+                    current_subscribed_topic_.clear();
+                }
+                topic_messages_.clear();
             }
             return true;
         }

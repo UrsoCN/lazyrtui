@@ -1,0 +1,25 @@
+keybindings:
+  switch_focus: "w"
+  refresh: "r"
+  search: "/"
+  echo_topic: "e"
+  plot_topic: "p"
+  call_service: "c"
+  send_goal: "g"
+  help: "?"
+  quit: "q"
+
+topics:
+  # Example: /turtle1/pose:
+  #   plot_fields: ["x", "y"]
+  #   plot_type: "line"
+
+services:
+  # Example: /spawn:
+  #   preset_params:
+  #     x: 2.0
+  #     y: 2.0
+
+ui:
+  auto_refresh_interval_ms: 2000
+  mouse_support: true

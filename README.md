@@ -8,22 +8,29 @@ A terminal user interface (TUI) for operating and monitoring ROS 2 nodes, topics
 - **Clean Log Policy**: Uses a single persistent ROS 2 node to prevent `~/.ros/log` directory clutter.
 - **Customizable**: Decoupled layout and user plugins for topic plotting and service parameter presets.
 
+## Requirements
+- ROS 2 (Humble/Jazzy)
+- CMake 3.14+
+- C++17 compiler
+
 ## Quick Start
 
-### 1. Auto Setup Environment
-Run the setup script to create `.venv` with `--system-site-packages` (so ROS 2 packages like `rclpy` are inherited seamlessly):
+### 1. Build LazyRTUI
+Configure and build the project using CMake:
 ```bash
-./scripts/setup_env.sh
+mkdir build
+cd build
+cmake ..
+make
 ```
 
 ### 2. Run LazyRTUI
-You can launch LazyRTUI via the top-level launcher script:
+You can launch LazyRTUI via the top-level launcher script, which will automatically source ROS 2 and build if necessary:
 ```bash
 ./run.sh
 ```
-Or source your ROS 2 environment and run `lazyrtui`:
+Or source your ROS 2 environment and run the executable directly:
 ```bash
 source /opt/ros/jazzy/setup.bash
-source .venv/bin/activate
-lazyrtui
+./build/lazyrtui
 ```

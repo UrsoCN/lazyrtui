@@ -1,0 +1,9 @@
+[submodule "third_party/FTXUI_v7.0.3"]
+	path = third_party/FTXUI_v7.0.3
+	url = https://github.com/ArthurSonzogni/FTXUI.git
+[submodule "third_party/yaml-cpp_0.9.0"]
+	path = third_party/yaml-cpp_0.9.0
+	url = https://github.com/jbeder/yaml-cpp.git
+[submodule "third_party/nlohmann_json_v3.12.0"]
+	path = third_party/nlohmann_json_v3.12.0
+	url = https://github.com/nlohmann/json.git

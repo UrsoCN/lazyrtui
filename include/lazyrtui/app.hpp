@@ -11,12 +11,8 @@
 
 #include "lazyrtui/config_loader.hpp"
 
-// Forward declarations to avoid including FTXUI headers here
-namespace ftxui {
-    class ScreenInteractive;
-    class ComponentBase;
-    using Component = std::shared_ptr<ComponentBase>;
-}
+#include <ftxui/component/component.hpp>
+#include <ftxui/component/screen_interactive.hpp>
 
 namespace lazyrtui {
 

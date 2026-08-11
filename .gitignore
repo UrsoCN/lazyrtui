@@ -1,6 +1,9 @@
 .venv/
 __pycache__/
 
+.agents/
+.vscode/
+
 *.pyc
 *.egg-info
 

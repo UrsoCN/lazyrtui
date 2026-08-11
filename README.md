@@ -48,29 +48,30 @@ git submodule update --init --recursive
 
 ### 2. Build
 
-Ensure your ROS 2 environment is sourced, then run the build script:
+Ensure your ROS 2 environment is sourced:
 ```bash
 source /opt/ros/<ros_distro>/setup.bash
-./build.sh
 ```
 
-Alternatively, build manually using CMake:
-```bash
-mkdir -p build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make -j$(nproc)
-```
+- **Standalone CMake build** (default):
+  ```bash
+  ./build.sh
+  ```
+- **ROS 2 `colcon` build**:
+  ```bash
+  ./build.sh --ros2
+  ```
+*(Note: `./build.sh` automatically cleans previous build artifacts when switching between CMake and colcon modes to prevent conflicts.)*
 
 ### 3. Run
 
-Run via the launcher script:
+Launch the compiled binary:
 ```bash
 ./run.sh
 ```
-
-Or execute directly after sourcing ROS 2:
+Or launch specifically with `--ros2`:
 ```bash
-./build/lazyrtui
+./run.sh --ros2
 ```
 
 ---

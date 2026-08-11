@@ -37,14 +37,18 @@ source /opt/ros/$ROS_DISTRO/setup.bash
 ```
 
 ### Build Commands
-To build the project:
+To build using standalone CMake:
 ```bash
 ./build.sh
 ```
-Or manually with CMake:
+To build using ROS 2 `colcon`:
 ```bash
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DPython3_EXECUTABLE=/usr/bin/python3
-cmake --build build -j$(nproc)
+./build.sh --ros2
+```
+To run the built binary:
+```bash
+./run.sh         # runs cmake-built or colcon-built binary
+./run.sh --ros2  # specifically sources install/setup.bash and runs colcon binary
 ```
 
 *Note*: If `catkin_pkg` or ROS 2 Python scripts fail during CMake configuration because a user-local Python environment overrides system Python, explicitly pass `-DPython3_EXECUTABLE=/usr/bin/python3` to CMake.

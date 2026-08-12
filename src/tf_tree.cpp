@@ -5,7 +5,7 @@ namespace lazyrtui {
 void TFTree::update_transform(const std::string &parent,
                               const std::string &child, double tx, double ty,
                               double tz, double rx, double ry, double rz,
-                              double rw) {
+                              double rw, double timestamp) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   // Get or create parent
@@ -33,10 +33,7 @@ void TFTree::update_transform(const std::string &parent,
   child_node->rotation.y = ry;
   child_node->rotation.z = rz;
   child_node->rotation.w = rw;
-  // Assuming you have some way to get current time or pass it in.
-  // Here we'll just set it to 0 or leave it as is if time wasn't provided.
-  // For a real ROS application, pass the ROS timestamp in.
-  child_node->last_update = 0.0; // TODO: Update with real timestamp
+  child_node->last_update = timestamp;
 
   // Add child to parent's children map
   parent_it->second->children[child] = child_node;

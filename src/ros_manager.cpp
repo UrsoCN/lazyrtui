@@ -39,6 +39,15 @@ namespace lazyrtui {
 // Forward declaration: defined near the typesupport-cache section below.
 static void cleanup_typesupport_caches();
 
+// Forward declarations: introspection helpers defined later in this file.
+static const ::rosidl_typesupport_introspection_cpp::MessageMembers* get_message_members(
+    const std::string& type_str);
+static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service_members(
+    const std::string& type_str, const rosidl_service_type_support_t** out_ts);
+static void read_struct_members(
+    const ::rosidl_typesupport_introspection_cpp::MessageMembers* members, const void* base,
+    std::stringstream& ss, int indent_level);
+
 struct ROS2Manager::Impl {
     rclcpp::Node::SharedPtr node_;
     rclcpp::executors::SingleThreadedExecutor::SharedPtr executor_;
@@ -164,6 +173,9 @@ void ROS2Manager::spin_loop() {
 void ROS2Manager::setup_tf_subscribers() {
     auto tf_callback = [this](const tf2_msgs::msg::TFMessage::SharedPtr msg) {
         for (const auto& transform : msg->transforms) {
+            const double timestamp =
+                static_cast<double>(transform.header.stamp.sec) +
+                static_cast<double>(transform.header.stamp.nanosec) * 1e-9;
             tf_tree_.update_transform(
                 transform.header.frame_id,
                 transform.child_frame_id,
@@ -173,7 +185,8 @@ void ROS2Manager::setup_tf_subscribers() {
                 transform.transform.rotation.x,
                 transform.transform.rotation.y,
                 transform.transform.rotation.z,
-                transform.transform.rotation.w
+                transform.transform.rotation.w,
+                timestamp
             );
         }
     };
@@ -308,13 +321,39 @@ TopicDetail ROS2Manager::get_topic_info(const std::string& topic_name) {
 }
 
 std::string ROS2Manager::get_service_request_json(const std::string& service_name, const std::string& type_str) {
-    // TODO: Dynamic message introspection
-    return "{\n  \"message\": \"Dynamic request introspection not fully implemented yet\"\n}";
+    (void)service_name;
+    const rosidl_service_type_support_t* ts = nullptr;
+    const auto* members = get_service_members(type_str, &ts);
+    if (!members || !members->request_members_) {
+        return "{\n  \"error\": \"Cannot load request typesupport for '" + type_str + "'\"\n}";
+    }
+    // Build the default request: initialize an ALL-defaulted struct and read
+    // it back as JSON (reuses the introspection read path; no CDR involved).
+    const auto* req_members = members->request_members_;
+    std::vector<uint8_t> storage(req_members->size_of_);
+    void* base = storage.data();
+    req_members->init_function(base, rosidl_runtime_cpp::MessageInitialization::ALL);
+    std::stringstream ss;
+    read_struct_members(req_members, base, ss, 0);
+    req_members->fini_function(base);
+    return ss.str();
 }
 
 std::string ROS2Manager::get_action_goal_json(const std::string& action_name, const std::string& type_str) {
-    // TODO: Dynamic message introspection
-    return "{\n  \"message\": \"Dynamic goal introspection not fully implemented yet\"\n}";
+    (void)action_name;
+    // In ROS 2 the action goal is introspected as its `_Goal` message.
+    const std::string goal_type = type_str + "_Goal";
+    const auto* members = get_message_members(goal_type);
+    if (!members) {
+        return "{\n  \"error\": \"Cannot load goal typesupport for '" + goal_type + "'\"\n}";
+    }
+    std::vector<uint8_t> storage(members->size_of_);
+    void* base = storage.data();
+    members->init_function(base, rosidl_runtime_cpp::MessageInitialization::ALL);
+    std::stringstream ss;
+    read_struct_members(members, base, ss, 0);
+    members->fini_function(base);
+    return ss.str();
 }
 
 struct TypeSupportHandleInfo {

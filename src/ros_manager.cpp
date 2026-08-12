@@ -250,7 +250,7 @@ std::vector<ActionInfo> ROS2Manager::get_actions() {
                 std::string t_act = t;
                 auto pos = t_act.find("_SendGoal_Service");
                 if(pos != std::string::npos) {
-                    t_act = t_act.substr(0, pos) + "_Action";
+                    t_act = t_act.substr(0, pos);
                 }
                 action_types.push_back(t_act);
             }
@@ -443,14 +443,26 @@ static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service
         return it->second.members;
     }
 
-    std::string pkg, srv_name;
+    std::string pkg, kind = "srv", srv_name;
     size_t slash1 = type_str.find('/');
     if (slash1 == std::string::npos) return nullptr;
     pkg = type_str.substr(0, slash1);
     size_t slash2 = type_str.find('/', slash1 + 1);
-    srv_name = (slash2 != std::string::npos) ? type_str.substr(slash2 + 1)
-                                             : type_str.substr(slash1 + 1);
+    if (slash2 != std::string::npos) {
+        // Middle segment is "srv" or "action" (action-generated services like
+        // pkg/action/Name_SendGoal_Service export with the `action` segment).
+        kind = type_str.substr(slash1 + 1, slash2 - slash1 - 1);
+        srv_name = type_str.substr(slash2 + 1);
+    } else {
+        srv_name = type_str.substr(slash1 + 1);
+    }
     if (pkg.empty() || srv_name.empty()) return nullptr;
+    // Action services export without the "_Service" suffix (e.g.
+    // ...__action__Name_SendGoal), while the graph type keeps it.
+    if (kind == "action" && srv_name.size() > 8 &&
+        srv_name.compare(srv_name.size() - 8, 8, "_Service") == 0) {
+        srv_name.erase(srv_name.size() - 8);
+    }
 
     std::string lib_name =
         "lib" + pkg + "__rosidl_typesupport_introspection_cpp.so";
@@ -459,7 +471,7 @@ static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service
 
     std::string sym_name =
         "rosidl_typesupport_introspection_cpp__get_service_type_support_handle__" +
-        pkg + "__srv__" + srv_name;
+        pkg + "__" + kind + "__" + srv_name;
     using GetTSFn = const rosidl_service_type_support_t* (*)();
     GetTSFn get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
     if (!get_ts_fn) {

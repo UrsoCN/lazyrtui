@@ -37,6 +37,7 @@ struct UiSnapshot {
   // Cached during refresh so Render() never issues ROS graph queries.
   std::map<std::string, NodeDetail> node_details;    // key: "/ns/name"
   std::map<std::string, TopicDetail> topic_details;  // key: topic name
+  std::map<std::string, std::vector<std::string>> interfaces_tree;  // pkg -> iface list
 };
 
 // ConstStringListRef adapter over an atomically-published immutable list, so
@@ -124,6 +125,8 @@ private:
   std::shared_ptr<SnapshotStringList> topics_menu_;
   std::shared_ptr<SnapshotStringList> services_menu_;
   std::shared_ptr<SnapshotStringList> actions_menu_;
+  std::shared_ptr<SnapshotStringList> interfaces_pkg_menu_;
+  std::shared_ptr<SnapshotStringList> interfaces_item_menu_;
 
   // Data cached for UI
   mutable std::mutex data_mutex_;
@@ -134,6 +137,7 @@ private:
   std::vector<std::string> actions_list_;
   std::map<std::string, NodeDetail> node_details_;    // key: "/ns/name"
   std::map<std::string, TopicDetail> topic_details_;  // key: topic name
+  std::map<std::string, std::vector<std::string>> interfaces_tree_;  // working copy
 
   // Node tab state
   int selected_node_ = 0;
@@ -158,8 +162,10 @@ private:
   std::string action_response_;
 
   // Interfaces tab state
-  int selected_interface_ = 0;
+  int selected_interface_pkg_ = 0;
+  int selected_interface_item_ = 0;
   int interface_pane_focus_ = 0;
+  std::string interface_detail_;  // UI-thread only (fetched on selection)
 
   // TF tab state
   int selected_tf_ = 0;

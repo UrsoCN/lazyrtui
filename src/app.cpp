@@ -15,7 +15,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
+#include <iomanip>
 #include <iostream>
+#include <random>
 #include <sstream>
 
 #ifndef LAZYRTUI_VERSION
@@ -33,6 +35,8 @@ LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr,
   topics_menu_ = std::make_shared<SnapshotStringList>();
   services_menu_ = std::make_shared<SnapshotStringList>();
   actions_menu_ = std::make_shared<SnapshotStringList>();
+  interfaces_pkg_menu_ = std::make_shared<SnapshotStringList>();
+  interfaces_item_menu_ = std::make_shared<SnapshotStringList>();
 
   tab_names_ = {"1:Nodes",      "2:Topics", "3:Services", "4:Actions",
                 "5:Interfaces", "6:Bags",   "7:TF",       "8:About"};
@@ -97,6 +101,7 @@ void LazyRTUIApp::publish_snapshot() {
   snap->topic_messages = topic_messages_map_;
   snap->node_details = node_details_;
   snap->topic_details = topic_details_;
+  snap->interfaces_tree = interfaces_tree_;
   std::atomic_store(&ui_snapshot_,
                     std::shared_ptr<const UiSnapshot>(std::move(snap)));
 
@@ -107,6 +112,15 @@ void LazyRTUIApp::publish_snapshot() {
       std::make_shared<const std::vector<std::string>>(services_list_));
   actions_menu_->publish(
       std::make_shared<const std::vector<std::string>>(actions_list_));
+  {
+    std::vector<std::string> pkg_names;
+    for (const auto& [pkg, ifaces] : interfaces_tree_) {
+      (void)ifaces;
+      pkg_names.push_back(pkg);
+    }
+    interfaces_pkg_menu_->publish(
+        std::make_shared<const std::vector<std::string>>(pkg_names));
+  }
 }
 
 LazyRTUIApp::~LazyRTUIApp() {
@@ -268,6 +282,7 @@ void LazyRTUIApp::refresh_data() {
     for (const auto &topic : subscribed_topics_) {
       topic_details_[topic] = ros_mgr_->get_topic_info(topic);
     }
+    interfaces_tree_ = ros_mgr_->get_interfaces_tree();
   } catch (...) {
     // Silently handle exceptions during refresh
   }
@@ -464,7 +479,29 @@ Component LazyRTUIApp::make_topics_tab() {
 }
 
 Component LazyRTUIApp::make_services_tab() {
-  auto menu = Menu(ConstStringListRef(services_menu_.get()), &selected_service_);
+  MenuOption menu_opt;
+  menu_opt.on_change = [this]() {
+    // Prefill the request template for the newly selected service.
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (!snap || !ros_mgr_ || selected_service_ < 0 ||
+        selected_service_ >= (int)snap->services_list.size()) {
+      return;
+    }
+    const std::string& entry = snap->services_list[selected_service_];
+    size_t pos = entry.find(" [");
+    if (pos == std::string::npos) return;
+    std::string name = entry.substr(0, pos);
+    std::string type = entry.substr(pos + 2);
+    if (!type.empty() && type.back() == ']') type.pop_back();
+    std::string tmpl = ros_mgr_->get_service_request_json(name, type);
+    try {
+      service_request_json_ = nlohmann::json::parse(tmpl).dump();  // Minify.
+    } catch (...) {
+      service_request_json_ = tmpl;
+    }
+  };
+  auto menu = Menu(ConstStringListRef(services_menu_.get()), &selected_service_,
+                   menu_opt);
 
   auto left_pane = Renderer(menu, [this, menu]() {
     return window(text("Services"), menu->Render()) |
@@ -473,7 +510,31 @@ Component LazyRTUIApp::make_services_tab() {
 
   auto input_json = Input(&service_request_json_, "{}");
   auto call_btn = Button("Call Service", [this]() {
-    service_response_ = "{\n  \"success\": true\n}";
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (!snap || !ros_mgr_ || selected_service_ < 0 ||
+        selected_service_ >= (int)snap->services_list.size()) {
+      return;
+    }
+    const std::string& entry = snap->services_list[selected_service_];
+    size_t pos = entry.find(" [");
+    if (pos == std::string::npos) return;
+    std::string name = entry.substr(0, pos);
+    std::string type = entry.substr(pos + 2);
+    if (!type.empty() && type.back() == ']') type.pop_back();
+
+    {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      service_response_ = "Calling " + name + " ...";
+    }
+    std::string request_json = service_request_json_;
+    ros_mgr_->call_service_async(
+        name, type, request_json,
+        [this](bool success, const std::string& response_json,
+               double elapsed_ms) {
+          std::lock_guard<std::mutex> lock(data_mutex_);
+          service_response_ = (success ? "[ok] " : "[error] ") + response_json +
+                              " (" + std::to_string(elapsed_ms) + " ms)";
+        });
   });
 
   auto right_container = Container::Vertical({input_json, call_btn});
@@ -486,8 +547,7 @@ Component LazyRTUIApp::make_services_tab() {
       selected = snap->services_list[selected_service_];
     }
 
-    // service_response_ will be written from a service-call worker thread;
-    // copy under the data mutex for a safe read here.
+    // service_response_ is written from the service-call worker thread.
     std::string response;
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
@@ -511,7 +571,29 @@ Component LazyRTUIApp::make_services_tab() {
 }
 
 Component LazyRTUIApp::make_actions_tab() {
-  auto menu = Menu(ConstStringListRef(actions_menu_.get()), &selected_action_);
+  MenuOption menu_opt;
+  menu_opt.on_change = [this]() {
+    // Prefill the goal template for the newly selected action.
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (!snap || !ros_mgr_ || selected_action_ < 0 ||
+        selected_action_ >= (int)snap->actions_list.size()) {
+      return;
+    }
+    const std::string& entry = snap->actions_list[selected_action_];
+    size_t pos = entry.find(" [");
+    if (pos == std::string::npos) return;
+    std::string name = entry.substr(0, pos);
+    std::string type = entry.substr(pos + 2);
+    if (!type.empty() && type.back() == ']') type.pop_back();
+    std::string tmpl = ros_mgr_->get_action_goal_json(name, type);
+    try {
+      action_goal_json_ = nlohmann::json::parse(tmpl).dump();  // Minify.
+    } catch (...) {
+      action_goal_json_ = tmpl;
+    }
+  };
+  auto menu = Menu(ConstStringListRef(actions_menu_.get()), &selected_action_,
+                   menu_opt);
 
   auto left_pane = Renderer(menu, [this, menu]() {
     return window(text("Actions"), menu->Render()) |
@@ -520,7 +602,51 @@ Component LazyRTUIApp::make_actions_tab() {
 
   auto input_json = Input(&action_goal_json_, "{}");
   auto goal_btn = Button("Send Goal", [this]() {
-    action_response_ = "Status: ACCEPTED\nResult: {}";
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (!snap || !ros_mgr_ || selected_action_ < 0 ||
+        selected_action_ >= (int)snap->actions_list.size()) {
+      return;
+    }
+    const std::string& entry = snap->actions_list[selected_action_];
+    size_t pos = entry.find(" [");
+    if (pos == std::string::npos) return;
+    std::string name = entry.substr(0, pos);
+    std::string type = entry.substr(pos + 2);
+    if (!type.empty() && type.back() == ']') type.pop_back();
+
+    // A goal is delivered through the action's send_goal service, reusing the
+    // dynamic service client (no raw rcl_action needed).
+    const std::string service_name = name + "/_action/send_goal";
+    const std::string service_type = type + "_SendGoal_Service";
+
+    nlohmann::json goal;
+    try {
+      goal = nlohmann::json::parse(action_goal_json_);
+    } catch (...) {
+      goal = nlohmann::json::object();
+    }
+    // goal_id is unique_identifier_msgs/msg/UUID (uint8 uuid[16]).
+    std::vector<uint8_t> uuid_bytes(16);
+    {
+      std::random_device rd;
+      for (auto& b : uuid_bytes) b = static_cast<uint8_t>(rd());
+    }
+    nlohmann::json request;
+    request["goal_id"] = {{"uuid", uuid_bytes}};
+    request["goal"] = goal;
+
+    {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      action_response_ = "Sending goal to " + name + " ...";
+    }
+    ros_mgr_->call_service_async(
+        service_name, service_type, request.dump(),
+        [this](bool success, const std::string& response_json,
+               double elapsed_ms) {
+          std::lock_guard<std::mutex> lock(data_mutex_);
+          action_response_ = (success ? "[ok] " : "[error] ") + response_json +
+                             " (" + std::to_string(elapsed_ms) + " ms)";
+        });
   });
 
   auto right_container = Container::Vertical({input_json, goal_btn});
@@ -533,11 +659,18 @@ Component LazyRTUIApp::make_actions_tab() {
       selected = snap->actions_list[selected_action_];
     }
 
+    // action_response_ is written from the service-call worker thread.
+    std::string response;
+    {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      response = action_response_;
+    }
+
     return window(
                text("Action Client: " + selected),
                vbox({text("Goal JSON:"), input_json->Render() | border,
                      goal_btn->Render(), separator(), text("Response/Status:"),
-                     text(action_response_) | borderLight})) |
+                     text(response) | borderLight})) |
            (action_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 
@@ -551,25 +684,77 @@ Component LazyRTUIApp::make_actions_tab() {
 }
 
 Component LazyRTUIApp::make_interfaces_tab() {
-  auto left_pane = Renderer([this]() {
-    return window(text("Packages"),
-                  vbox({text("std_msgs"), text("  msg/String"),
-                        text("  msg/Int32")})) |
+  MenuOption pkg_opt;
+  pkg_opt.on_change = [this]() {
+    // Publish the interface list of the newly selected package.
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (!snap || selected_interface_pkg_ < 0 ||
+        selected_interface_pkg_ >= (int)snap->interfaces_tree.size()) {
+      interfaces_item_menu_->publish(
+          std::make_shared<const std::vector<std::string>>());
+      return;
+    }
+    auto it = snap->interfaces_tree.begin();
+    std::advance(it, selected_interface_pkg_);
+    interfaces_item_menu_->publish(
+        std::make_shared<const std::vector<std::string>>(it->second));
+    selected_interface_item_ = 0;
+  };
+  auto pkg_menu = Menu(ConstStringListRef(interfaces_pkg_menu_.get()),
+                       &selected_interface_pkg_, pkg_opt);
+
+  MenuOption item_opt;
+  item_opt.on_change = [this]() {
+    // Fetch the definition of the selected interface (UI thread, bounded).
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (!snap || !ros_mgr_) return;
+    std::string iface;
+    if (selected_interface_pkg_ >= 0 &&
+        selected_interface_pkg_ < (int)snap->interfaces_tree.size()) {
+      auto it = snap->interfaces_tree.begin();
+      std::advance(it, selected_interface_pkg_);
+      if (selected_interface_item_ >= 0 &&
+          selected_interface_item_ < (int)it->second.size()) {
+        iface = it->second[selected_interface_item_];
+      }
+    }
+    if (!iface.empty()) {
+      interface_detail_ = ros_mgr_->get_interface_detail(iface);
+    }
+  };
+  auto item_menu = Menu(ConstStringListRef(interfaces_item_menu_.get()),
+                        &selected_interface_item_, item_opt);
+
+  // Seed the initial package selection (on_change does not fire on startup).
+  {
+    auto snap = std::atomic_load(&ui_snapshot_);
+    if (snap && !snap->interfaces_tree.empty()) {
+      auto it = snap->interfaces_tree.begin();
+      interfaces_item_menu_->publish(
+          std::make_shared<const std::vector<std::string>>(it->second));
+    }
+  }
+
+  auto left_pane = Renderer(pkg_menu, [this, pkg_menu]() {
+    return window(text("Packages"), pkg_menu->Render()) |
            (interface_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
-
-  auto right_pane = Renderer([this]() {
-    return window(text("Interface Definition"),
-                  vbox({text("std_msgs/msg/String"), separator(),
-                        text("string data")})) |
+  auto middle_pane = Renderer(item_menu, [this, item_menu]() {
+    return window(text("Interfaces"), item_menu->Render()) |
            (interface_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
+  auto right_pane = Renderer([this]() {
+    return window(text("Interface Definition"),
+                  vbox({text(interface_detail_) | dim})) |
+           (interface_pane_focus_ == 2 ? borderLight : borderEmpty);
+  });
 
-  auto container =
-      Container::Horizontal({left_pane, right_pane}, &interface_pane_focus_);
+  auto container = Container::Horizontal(
+      {left_pane, middle_pane, right_pane}, &interface_pane_focus_);
 
-  return Renderer(container, [left_pane, right_pane]() {
-    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
+  return Renderer(container, [left_pane, middle_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 20),
+                 middle_pane->Render() | size(WIDTH, GREATER_THAN, 30),
                  right_pane->Render() | flex});
   });
 }
@@ -585,28 +770,42 @@ Component LazyRTUIApp::make_bags_tab() {
 }
 
 Component LazyRTUIApp::make_tf_tab() {
-  auto left_pane = Renderer([this]() {
-    return window(text("TF Tree"), vbox({text("world"), text("  └── base_link"),
-                                         text("      └── laser_link")})) |
-           (tf_pane_focus_ == 0 ? borderLight : borderEmpty);
-  });
-
-  auto right_pane = Renderer([this]() {
-    return window(
-               text("Transform Details"),
-               vbox({text("Translation:"), text("  x: 0.0"), text("  y: 0.0"),
-                     text("  z: 0.0"), separator(),
-                     text("Rotation (Quaternion):"), text("  x: 0.0"),
-                     text("  y: 0.0"), text("  z: 0.0"), text("  w: 1.0")})) |
-           (tf_pane_focus_ == 1 ? borderLight : borderEmpty);
-  });
-
-  auto container =
-      Container::Horizontal({left_pane, right_pane}, &tf_pane_focus_);
-
-  return Renderer(container, [left_pane, right_pane]() {
-    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
-                 right_pane->Render() | flex});
+  return Renderer([this]() {
+    Elements items;
+    if (ros_mgr_) {
+      const auto roots = ros_mgr_->get_tf_tree().get_roots();
+      std::function<void(const std::shared_ptr<TFTreeNode>&, int)> visit;
+      visit = [&visit, &items](const std::shared_ptr<TFTreeNode>& node,
+                               int depth) {
+        std::string line;
+        if (depth > 0) {
+          line = std::string(depth * 2 - 2, ' ') + "└── ";
+        }
+        line += node->frame_id;
+        std::stringstream ds;
+        ds << std::fixed << std::setprecision(3)
+           << "  (x: " << node->translation.x << ", y: " << node->translation.y
+           << ", z: " << node->translation.z << " | rot: " << node->rotation.x
+           << ", " << node->rotation.y << ", " << node->rotation.z << ", "
+           << node->rotation.w << " | updated: " << node->last_update << "s)";
+        line += ds.str();
+        items.push_back(text(line));
+        for (const auto& [child_id, child] : node->children) {
+          (void)child_id;
+          visit(child, depth + 1);
+        }
+      };
+      for (const auto& [frame_id, node] : roots) {
+        (void)frame_id;
+        visit(node, 0);
+      }
+      if (items.empty()) {
+        items.push_back(text("No TF frames received yet") | dim);
+      }
+    } else {
+      items.push_back(text("ROS 2 not connected") | dim);
+    }
+    return window(text("TF Tree (live transforms)"), vbox(items)) | borderLight;
   });
 }
 

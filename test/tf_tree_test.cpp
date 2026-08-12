@@ -53,6 +53,32 @@ TEST(TFTreeTest, SnapshotDeepCopiesWithTimestamps) {
   EXPECT_EQ(child.children[0].last_update, 200.0);
 }
 
+TEST(TFTreeTest, SnapshotTerminatesOnCycle) {
+  TFTree tree;
+  // "" -> a makes a.root-eligible (parent_id == ""). Re-parenting "" under a
+  // then forms a root-reachable cycle: a is a root, a.children contains "",
+  // "" still lists a as its child.
+  tree.update_transform("", "a", 0, 0, 0, 0, 0, 0, 1);
+  tree.update_transform("a", "", 0, 0, 0, 0, 0, 0, 1);
+  auto snap = tree.snapshot();  // Must terminate (visited set + depth cap).
+  ASSERT_FALSE(snap.roots.empty());
+  const TFSnapshotNode *a = nullptr;
+  for (const auto &r : snap.roots) {
+    if (r.frame_id == "a") {
+      a = &r;
+      break;
+    }
+  }
+  ASSERT_NE(a, nullptr);
+  ASSERT_EQ(a->children.size(), 1u);
+  EXPECT_EQ(a->children[0].frame_id, "");
+  // The back-edge into "a" is blocked by the visited set: the "" node never
+  // re-expands a full "a" node (an empty stub may remain in its children).
+  for (const auto &c : a->children[0].children) {
+    EXPECT_NE(c.frame_id, "a");
+  }
+}
+
 TEST(TFTreeTest, ClearRemovesAll) {
   TFTree tree;
   tree.update_transform("a", "b", 0, 0, 0, 0, 0, 0, 1);

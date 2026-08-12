@@ -29,6 +29,11 @@ namespace lazyrtui {
 LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr,
                          const Config &config)
     : ros_mgr_(std::move(ros_mgr)), config_(config) {
+  nodes_menu_ = std::make_shared<SnapshotStringList>();
+  topics_menu_ = std::make_shared<SnapshotStringList>();
+  services_menu_ = std::make_shared<SnapshotStringList>();
+  actions_menu_ = std::make_shared<SnapshotStringList>();
+
   tab_names_ = {"1:Nodes",      "2:Topics", "3:Services", "4:Actions",
                 "5:Interfaces", "6:Bags",   "7:TF",       "8:About"};
 
@@ -75,6 +80,33 @@ LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr,
       std::cerr << "  - " << p.name << " (" << p.file_path << ")\n";
     }
   }
+
+  // Publish the initial (static/demo) data so the UI renders before the first
+  // refresh cycle completes. Single-threaded construction: no lock needed.
+  publish_snapshot();
+}
+
+void LazyRTUIApp::publish_snapshot() {
+  // data_mutex_ must be held by the caller (except during construction).
+  auto snap = std::make_shared<UiSnapshot>();
+  snap->nodes_list = nodes_list_;
+  snap->topics_menu_labels = topics_menu_labels_;
+  snap->services_list = services_list_;
+  snap->actions_list = actions_list_;
+  snap->subscribed_topics = subscribed_topics_;
+  snap->topic_messages = topic_messages_map_;
+  snap->node_details = node_details_;
+  snap->topic_details = topic_details_;
+  std::atomic_store(&ui_snapshot_,
+                    std::shared_ptr<const UiSnapshot>(std::move(snap)));
+
+  nodes_menu_->publish(std::make_shared<const std::vector<std::string>>(nodes_list_));
+  topics_menu_->publish(
+      std::make_shared<const std::vector<std::string>>(topics_menu_labels_));
+  services_menu_->publish(
+      std::make_shared<const std::vector<std::string>>(services_list_));
+  actions_menu_->publish(
+      std::make_shared<const std::vector<std::string>>(actions_list_));
 }
 
 LazyRTUIApp::~LazyRTUIApp() {
@@ -121,6 +153,7 @@ void LazyRTUIApp::toggle_topic_subscription(int index) {
               msgs.erase(msgs.begin());
             }
             msgs.push_back(msg);
+            publish_snapshot();
             if (screen_) {
               screen_->PostEvent(Event::Custom);
             }
@@ -137,6 +170,7 @@ void LazyRTUIApp::toggle_topic_subscription(int index) {
     topics_menu_labels_.push_back(std::string(is_sub ? "[x] " : "[ ] ") +
                                   t_str);
   }
+  publish_snapshot();
 }
 
 void LazyRTUIApp::start_refresh_timer() {
@@ -223,13 +257,26 @@ void LazyRTUIApp::refresh_data() {
     }
     if (new_actions != actions_list_)
       actions_list_ = std::move(new_actions);
+
+    // Cache graph-derived details so Render() never issues graph queries.
+    node_details_.clear();
+    for (const auto &n : nodes) {
+      node_details_[n.ns + (n.ns == "/" ? "" : "/") + n.name] =
+          ros_mgr_->get_node_info(n.name, n.ns);
+    }
+    topic_details_.clear();
+    for (const auto &topic : subscribed_topics_) {
+      topic_details_[topic] = ros_mgr_->get_topic_info(topic);
+    }
   } catch (...) {
     // Silently handle exceptions during refresh
   }
+
+  publish_snapshot();
 }
 
 Component LazyRTUIApp::make_nodes_tab() {
-  auto menu = Menu(&nodes_list_, &selected_node_);
+  auto menu = Menu(ConstStringListRef(nodes_menu_.get()), &selected_node_);
 
   auto left_pane = Renderer(menu, [this, menu]() {
     return window(text("Nodes"), menu->Render()) |
@@ -237,51 +284,48 @@ Component LazyRTUIApp::make_nodes_tab() {
   });
 
   auto right_pane = Renderer([this]() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    std::string selected =
-        (selected_node_ >= 0 && selected_node_ < (int)nodes_list_.size())
-            ? nodes_list_[selected_node_]
-            : "None";
+    auto snap = std::atomic_load(&ui_snapshot_);
+    std::string selected = "None";
+    if (snap && selected_node_ >= 0 &&
+        selected_node_ < (int)snap->nodes_list.size()) {
+      selected = snap->nodes_list[selected_node_];
+    }
 
     Elements items;
-    if (selected != "None" && ros_mgr_) {
-      std::string name = selected;
-      std::string ns = "/";
-      size_t last_slash = selected.find_last_of('/');
-      if (last_slash != std::string::npos && last_slash > 0) {
-        ns = selected.substr(0, last_slash);
-        name = selected.substr(last_slash + 1);
-      } else if (last_slash == 0) {
-        name = selected.substr(1);
-      }
-      auto detail = ros_mgr_->get_node_info(name, ns);
-
-      items.push_back(text("Publishers:") | bold);
-      if (detail.publishers.empty()) {
-        items.push_back(text("  (None)") | dim);
+    if (selected != "None" && snap) {
+      auto it = snap->node_details.find(selected);
+      if (it == snap->node_details.end()) {
+        items.push_back(text("Waiting for node detail...") | dim);
       } else {
-        for (const auto &[t, type] : detail.publishers) {
-          items.push_back(text("  - " + t + " [" + type + "]"));
+        const auto &detail = it->second;
+
+        items.push_back(text("Publishers:") | bold);
+        if (detail.publishers.empty()) {
+          items.push_back(text("  (None)") | dim);
+        } else {
+          for (const auto &[t, type] : detail.publishers) {
+            items.push_back(text("  - " + t + " [" + type + "]"));
+          }
         }
-      }
-      items.push_back(separator());
+        items.push_back(separator());
 
-      items.push_back(text("Subscribers:") | bold);
-      if (detail.subscribers.empty()) {
-        items.push_back(text("  (None)") | dim);
-      } else {
-        for (const auto &[t, type] : detail.subscribers) {
-          items.push_back(text("  - " + t + " [" + type + "]"));
+        items.push_back(text("Subscribers:") | bold);
+        if (detail.subscribers.empty()) {
+          items.push_back(text("  (None)") | dim);
+        } else {
+          for (const auto &[t, type] : detail.subscribers) {
+            items.push_back(text("  - " + t + " [" + type + "]"));
+          }
         }
-      }
-      items.push_back(separator());
+        items.push_back(separator());
 
-      items.push_back(text("Services:") | bold);
-      if (detail.services.empty()) {
-        items.push_back(text("  (None)") | dim);
-      } else {
-        for (const auto &[s, type] : detail.services) {
-          items.push_back(text("  - " + s + " [" + type + "]"));
+        items.push_back(text("Services:") | bold);
+        if (detail.services.empty()) {
+          items.push_back(text("  (None)") | dim);
+        } else {
+          for (const auto &[s, type] : detail.services) {
+            items.push_back(text("  - " + s + " [" + type + "]"));
+          }
         }
       }
     } else {
@@ -302,7 +346,7 @@ Component LazyRTUIApp::make_nodes_tab() {
 }
 
 Component LazyRTUIApp::make_topics_tab() {
-  auto menu = Menu(&topics_menu_labels_, &selected_topic_);
+  auto menu = Menu(ConstStringListRef(topics_menu_.get()), &selected_topic_);
 
   auto left_pane = Renderer(menu, [this, menu]() {
     return window(text("Topics (Space/'e' to Toggle)"), menu->Render()) |
@@ -310,9 +354,12 @@ Component LazyRTUIApp::make_topics_tab() {
   });
 
   auto right_pane = Renderer([this]() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
+    auto snap = std::atomic_load(&ui_snapshot_);
+    const std::set<std::string> empty_set;
+    const auto &subscribed =
+        snap ? snap->subscribed_topics : empty_set;
 
-    if (subscribed_topics_.empty()) {
+    if (subscribed.empty()) {
       return window(text("Topic Echo"),
                     vbox({text("Status: No topics currently subscribed.") |
                               color(Color::Yellow),
@@ -328,10 +375,17 @@ Component LazyRTUIApp::make_topics_tab() {
     }
 
     Elements topic_windows;
-    for (const auto &topic_name : subscribed_topics_) {
+    const std::map<std::string, std::vector<std::string>> empty_messages;
+    for (const auto &topic_name : subscribed) {
       Elements msgs;
-      auto detail =
-          ros_mgr_ ? ros_mgr_->get_topic_info(topic_name) : TopicDetail{};
+
+      TopicDetail detail;
+      if (snap) {
+        auto dit = snap->topic_details.find(topic_name);
+        if (dit != snap->topic_details.end()) {
+          detail = dit->second;
+        }
+      }
 
       std::string py_module;
       if (python_plugin_engine_) {
@@ -341,8 +395,9 @@ Component LazyRTUIApp::make_topics_tab() {
 
       if (!py_module.empty()) {
         // Rendered via Python Plugin
-        auto it = topic_messages_map_.find(topic_name);
-        if (it != topic_messages_map_.end() && !it->second.empty()) {
+        const auto &msgs_map = snap ? snap->topic_messages : empty_messages;
+        auto it = msgs_map.find(topic_name);
+        if (it != msgs_map.end() && !it->second.empty()) {
           const std::string &raw = it->second.back();
           std::string json_body;
           if (raw.size() > 11 && raw[0] == '[' && raw[9] == ']') {
@@ -374,8 +429,9 @@ Component LazyRTUIApp::make_topics_tab() {
             dim);
         msgs.push_back(separator());
 
-        auto it = topic_messages_map_.find(topic_name);
-        if (it != topic_messages_map_.end() && !it->second.empty()) {
+        const auto &msgs_map = snap ? snap->topic_messages : empty_messages;
+        auto it = msgs_map.find(topic_name);
+        if (it != msgs_map.end() && !it->second.empty()) {
           for (const auto &m : it->second) {
             std::stringstream ss(m);
             std::string line;
@@ -393,7 +449,7 @@ Component LazyRTUIApp::make_topics_tab() {
     }
 
     return window(text("Live Topic Echoes (" +
-                       std::to_string(subscribed_topics_.size()) + " active)"),
+                       std::to_string(subscribed.size()) + " active)"),
                   vbox(topic_windows)) |
            (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
@@ -408,7 +464,7 @@ Component LazyRTUIApp::make_topics_tab() {
 }
 
 Component LazyRTUIApp::make_services_tab() {
-  auto menu = Menu(&services_list_, &selected_service_);
+  auto menu = Menu(ConstStringListRef(services_menu_.get()), &selected_service_);
 
   auto left_pane = Renderer(menu, [this, menu]() {
     return window(text("Services"), menu->Render()) |
@@ -445,7 +501,7 @@ Component LazyRTUIApp::make_services_tab() {
 }
 
 Component LazyRTUIApp::make_actions_tab() {
-  auto menu = Menu(&actions_list_, &selected_action_);
+  auto menu = Menu(ConstStringListRef(actions_menu_.get()), &selected_action_);
 
   auto left_pane = Renderer(menu, [this, menu]() {
     return window(text("Actions"), menu->Render()) |

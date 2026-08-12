@@ -11,6 +11,7 @@
 #include <thread>
 #include <vector>
 
+#include "lazyrtui/ros_manager.hpp"
 #include "lazyrtui/config_loader.hpp"
 #include "lazyrtui/python_plugin_engine.hpp"
 
@@ -19,8 +20,47 @@
 
 namespace lazyrtui {
 
-// Forward declarations
-class ROS2Manager;
+// ros_manager.hpp is included above for NodeDetail/TopicDetail only;
+// ROS2Manager itself remains used via shared_ptr from app.cpp.
+
+// Immutable snapshot of every dataset the FTXUI render path reads. Writers
+// (refresh thread, ROS callbacks, UI-thread mutations) publish a fresh
+// snapshot under data_mutex_; Render() lambdas read the latest snapshot
+// lock-free, so rendering never blocks on the data mutex or graph queries.
+struct UiSnapshot {
+  std::vector<std::string> nodes_list;
+  std::vector<std::string> topics_menu_labels;
+  std::vector<std::string> services_list;
+  std::vector<std::string> actions_list;
+  std::set<std::string> subscribed_topics;
+  std::map<std::string, std::vector<std::string>> topic_messages;
+  // Cached during refresh so Render() never issues ROS graph queries.
+  std::map<std::string, NodeDetail> node_details;    // key: "/ns/name"
+  std::map<std::string, TopicDetail> topic_details;  // key: topic name
+};
+
+// ConstStringListRef adapter over an atomically-published immutable list, so
+// FTXUI Menu components render lock-free from the UI thread.
+class SnapshotStringList : public ftxui::ConstStringListRef::Adapter {
+ public:
+  size_t size() const override {
+    auto list = std::atomic_load(&list_);
+    return list ? list->size() : 0;
+  }
+  std::string_view operator[](size_t i) const override {
+    auto list = std::atomic_load(&list_);
+    if (list && i < list->size()) {
+      return (*list)[i];
+    }
+    return "";
+  }
+  void publish(std::shared_ptr<const std::vector<std::string>> list) {
+    std::atomic_store(&list_, std::move(list));
+  }
+
+ private:
+  std::shared_ptr<const std::vector<std::string>> list_;
+};
 
 class LazyRTUIApp {
 public:
@@ -54,6 +94,9 @@ private:
   void refresh_data();
   void start_refresh_timer();
   void stop_refresh_timer();
+  // Copies the working datasets into a new immutable snapshot and publishes
+  // it plus the menu lists. Call while holding data_mutex_.
+  void publish_snapshot();
 
   std::shared_ptr<ROS2Manager> ros_mgr_;
   Config config_;
@@ -67,6 +110,16 @@ private:
   std::condition_variable refresh_cv_;  // Interruptible sleep for the refresh loop.
   std::unique_ptr<std::thread> refresh_thread_;
 
+  // Double-buffered UI data: writers mutate working copies under
+  // data_mutex_, then publish an immutable snapshot Render() reads lock-free.
+  std::shared_ptr<const UiSnapshot> ui_snapshot_;  // atomically published
+
+  // Menu adapters (bound once at construction; read snapshots lock-free).
+  std::shared_ptr<SnapshotStringList> nodes_menu_;
+  std::shared_ptr<SnapshotStringList> topics_menu_;
+  std::shared_ptr<SnapshotStringList> services_menu_;
+  std::shared_ptr<SnapshotStringList> actions_menu_;
+
   // Data cached for UI
   mutable std::mutex data_mutex_;
   std::vector<std::string> nodes_list_;
@@ -74,6 +127,8 @@ private:
   std::vector<std::string> topics_menu_labels_;
   std::vector<std::string> services_list_;
   std::vector<std::string> actions_list_;
+  std::map<std::string, NodeDetail> node_details_;    // key: "/ns/name"
+  std::map<std::string, TopicDetail> topic_details_;  // key: topic name
 
   // Node tab state
   int selected_node_ = 0;

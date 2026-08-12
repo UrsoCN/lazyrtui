@@ -124,6 +124,14 @@ Development follows a **test-first** discipline: every functional change (featur
 
 New modules MUST get a matching test target in the same commit as the feature.
 
+CMake wiring pattern (use `test_config_loader` as the template):
+```cmake
+ament_add_gtest(test_<module> test/<module>_test.cpp src/<module>.cpp)
+target_include_directories(test_<module> PRIVATE include)
+target_link_libraries(test_<module> <module-specific-deps>)
+```
+Module-specific deps: `yaml-cpp` (config), `ftxui::dom ftxui::screen` + `nlohmann_json::nlohmann_json` (converter), `${Python3_LIBRARIES}` + `nlohmann_json::nlohmann_json` (plugin engine, plus `${Python3_INCLUDE_DIRS}` in include dirs), `src` include dir for header-only modules (`test_cdr_utils`).
+
 ### Test-First Workflow
 1. **Write the failing test first** — encode the required behavior as assertions (not crash-freedom; assert real output/semantics).
 2. **Run it against current code** to confirm it fails for the right reason.
@@ -139,9 +147,9 @@ New modules MUST get a matching test target in the same commit as the feature.
 
 ### GIL / Refcount Discipline for Python-Embedding Tests
 - The engine acquires the GIL internally via `GilGuard`; tests call only the public API.
-- When a test exercises a fallback/exception path, a subsequent test that imports the same module may crash if the engine leaks or double-releases refs. A segfault that appears only in full-suite runs (not in isolation) is almost always a refcount bug in `python_plugin_engine.cpp` — run the suite under gdb (`gdb -batch -ex run -ex bt ./build/<target>`) to confirm.
+- When a test exercises a fallback/exception path, a later Python import may crash if the engine leaks or double-releases refs — e.g. a double-DECREF in the invalid-JSON fallback freed the stdlib `json` module while `sys.modules["json"]` still referenced it, and the next `PyImport_ImportModule("json")` dereferenced freed memory. A segfault that appears only in full-suite runs (not in isolation) is almost always a refcount bug in `python_plugin_engine.cpp` — run the suite under gdb (`gdb -batch -ex run -ex bt ./build/<target>`) to confirm.
 
 ### Verification
 - Before committing any change: build with `cmake --build build -j"$(nproc)"` and run `ctest --test-dir build --output-on-failure` (all targets must pass).
-- Run the full suite, not just the changed target, after touching shared code (`tf_tree.cpp`, `cdr_utils.hpp`, `python_plugin_engine.cpp` are shared by multiple targets).
+- Run the full suite, not just the changed target, when the change could affect shared code — e.g. `cdr_utils.hpp` is included by `src/ros_manager.cpp` (the main app) as well as `test_cdr_utils`, and `python_plugin_engine.cpp` exercises CPython state that persists across tests. The suite is 5 cheap targets (<1s); running all of it after any change costs little and catches cross-target interference.
 

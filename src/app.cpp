@@ -773,31 +773,27 @@ Component LazyRTUIApp::make_tf_tab() {
   return Renderer([this]() {
     Elements items;
     if (ros_mgr_) {
-      const auto roots = ros_mgr_->get_tf_tree().get_roots();
-      std::function<void(const std::shared_ptr<TFTreeNode>&, int)> visit;
-      visit = [&visit, &items](const std::shared_ptr<TFTreeNode>& node,
-                               int depth) {
+      const TFSnapshot snap = ros_mgr_->get_tf_tree().snapshot();
+      std::function<void(const TFSnapshotNode &, int)> visit;
+      visit = [&visit, &items](const TFSnapshotNode &node, int depth) {
         std::string line;
         if (depth > 0) {
           line = std::string(depth * 2 - 2, ' ') + "└── ";
         }
-        line += node->frame_id;
+        line += node.frame_id;
         std::stringstream ds;
         ds << std::fixed << std::setprecision(3)
-           << "  (x: " << node->translation.x << ", y: " << node->translation.y
-           << ", z: " << node->translation.z << " | rot: " << node->rotation.x
-           << ", " << node->rotation.y << ", " << node->rotation.z << ", "
-           << node->rotation.w << " | updated: " << node->last_update << "s)";
+           << "  (x: " << node.tx << ", y: " << node.ty << ", z: " << node.tz
+           << " | rot: " << node.rx << ", " << node.ry << ", " << node.rz << ", "
+           << node.rw << " | updated: " << node.last_update << "s)";
         line += ds.str();
         items.push_back(text(line));
-        for (const auto& [child_id, child] : node->children) {
-          (void)child_id;
+        for (const auto &child : node.children) {
           visit(child, depth + 1);
         }
       };
-      for (const auto& [frame_id, node] : roots) {
-        (void)frame_id;
-        visit(node, 0);
+      for (const auto &root : snap.roots) {
+        visit(root, 0);
       }
       if (items.empty()) {
         items.push_back(text("No TF frames received yet") | dim);

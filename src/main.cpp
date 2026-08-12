@@ -47,6 +47,10 @@ int main(int argc, char **argv) {
   if (!g_shutdown_requested.load()) {
     lazyrtui::LazyRTUIApp app(ros_mgr, config);
     app.run();
+    // Join the service-call worker here, while the app (whose members the
+    // worker callbacks touch) is still alive; the cleanup block below is an
+    // idempotent second stop().
+    ros_mgr->stop();
   }
 
   // Cleanup — always runs on the main thread, never inside a signal handler.

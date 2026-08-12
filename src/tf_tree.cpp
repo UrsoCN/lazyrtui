@@ -1,5 +1,8 @@
 #include "lazyrtui/tf_tree.hpp"
 
+#include <functional>
+#include <set>
+
 namespace lazyrtui {
 
 void TFTree::update_transform(const std::string &parent,
@@ -66,6 +69,43 @@ TFTree::find_frame(const std::string &frame_id) const {
     return it->second;
   }
   return nullptr;
+}
+
+TFSnapshot TFTree::snapshot() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  TFSnapshot out;
+  std::set<std::string> visited;  // Cycle guard: update_transform permits loops.
+  std::function<void(const std::shared_ptr<TFTreeNode> &, TFSnapshotNode &, int)>
+      copy_node;
+  copy_node = [&](const std::shared_ptr<TFTreeNode> &src, TFSnapshotNode &dst,
+                  int depth) {
+    if (!src || depth > 64 || !visited.insert(src->frame_id).second) {
+      return;
+    }
+    dst.frame_id = src->frame_id;
+    dst.parent_id = src->parent_id;
+    dst.tx = src->translation.x;
+    dst.ty = src->translation.y;
+    dst.tz = src->translation.z;
+    dst.rx = src->rotation.x;
+    dst.ry = src->rotation.y;
+    dst.rz = src->rotation.z;
+    dst.rw = src->rotation.w;
+    dst.last_update = src->last_update;
+    for (const auto &[child_id, child] : src->children) {
+      (void)child_id;
+      dst.children.emplace_back();
+      copy_node(child, dst.children.back(), depth + 1);
+    }
+  };
+  for (const auto &[frame_id, node] : frames_) {
+    (void)frame_id;
+    if (node->parent_id.empty()) {  // Roots: frames without a parent.
+      out.roots.emplace_back();
+      copy_node(node, out.roots.back(), 0);
+    }
+  }
+  return out;
 }
 
 void TFTree::clear() {

@@ -81,6 +81,37 @@ Or launch specifically in ROS 2 colcon mode:
 
 ---
 
+## Testing
+
+Development follows a **test-first** discipline: every functional change ships with unit tests (GoogleTest via `ament_add_gtest`) that pin the new behavior, and a fix is complete only when the test reproducing the original defect passes.
+
+One test target per module under `test/`:
+
+| Target | Module under test |
+|---|---|
+| `test_tf_tree` | TF frame tree — re-parenting, cycles, snapshots |
+| `test_config_loader` | YAML config parsing & fallback chain |
+| `test_ftxui_converter` | JSON UI spec → FTXUI rendering |
+| `test_cdr_utils` | CDR byte-swap / endianness utilities |
+| `test_python_plugin_engine` | Python plugin engine (embeds CPython) |
+
+Run all tests (standalone CMake build):
+```bash
+source /opt/ros/<ros_distro>/setup.bash
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+```
+
+Or via colcon:
+```bash
+colcon test --packages-select lazyrtui
+colcon test-result --all --verbose
+```
+
+Tests are deterministic and hermetic (no reliance on host env, `HOME`, or `CWD`); the full paradigm and isolation rules are documented in [`AGENTS.md`](file:///home/u/source/open_source/lazyrtui/AGENTS.md).
+
+---
+
 ## Keybindings
 
 | Key | Action |

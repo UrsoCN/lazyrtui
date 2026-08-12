@@ -61,6 +61,15 @@ colcon test --packages-select lazyrtui
 colcon test-result --all --verbose
 ```
 
+To run unit tests with the standalone CMake build:
+```bash
+source /opt/ros/$ROS_DISTRO/setup.bash
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+```
+
+To run a single test target: `./build/<target>` (e.g. `./build/test_python_plugin_engine`).
+
 ---
 
 ## 4. Code Structure & Architecture Guidelines
@@ -93,3 +102,46 @@ colcon test-result --all --verbose
 ### Code Formatting (clang-format)
 - Code formatting follows the **LLVM style** (`clang-format -style=LLVM`).
 - Key parameters: 2-space indentation, 80-column limit, no tabs, braces attached (`BreakBeforeBraces: Attach`), pointer/reference alignment on the right (`int* p`), short functions inline only.
+
+---
+
+## 5. Testing Paradigm (Test-First)
+
+### Principle
+Development follows a **test-first** discipline: every functional change (feature, bug fix, refactor) is accompanied by unit tests that pin the new behavior. Tests are written against the behavior spec before or together with the implementation, and a fix is only complete when the test that reproduces the original defect passes. This is not optional for the orchestrator or delegated agents.
+
+### Framework & Targets
+- Framework: **GoogleTest** via `ament_add_gtest` (ROS 2 standard). No other test framework is used.
+- One test target per module under `test/`, wired in `CMakeLists.txt` under `if(BUILD_TESTING)`:
+
+| Target | Module under test |
+|---|---|
+| `test_tf_tree` | `src/tf_tree.cpp` — frame tree semantics |
+| `test_config_loader` | `src/config_loader.cpp` — YAML parsing & fallback chain |
+| `test_ftxui_converter` | `src/ftxui_converter.cpp` — JSON UI spec → FTXUI rendering |
+| `test_cdr_utils` | `src/cdr_utils.hpp` — CDR byte-swap/endianness |
+| `test_python_plugin_engine` | `src/python_plugin_engine.cpp` — Python plugin engine (embeds CPython) |
+
+New modules MUST get a matching test target in the same commit as the feature.
+
+### Test-First Workflow
+1. **Write the failing test first** — encode the required behavior as assertions (not crash-freedom; assert real output/semantics).
+2. **Run it against current code** to confirm it fails for the right reason.
+3. **Implement** the change, then make the test pass.
+4. For pure-logic modules prefer **rendered-output or value assertions** over "doesn't throw": e.g. `ftxui::Screen` + `ToString()`/`CellAt` for FTXUI elements, JSON round-trip for the plugin engine.
+5. Every test must be **deterministic and hermetic**: no dependency on host env, `HOME`, `CWD`, or network; use temp-dir fixtures that are cleaned up in `TearDown`.
+
+### Hermeticity & Isolation Rules (learned from real failures)
+- **Temp dirs must be unique per test** (pid + counter suffix). CPython caches directory listings in `sys.path_importer_cache` keyed by path string; deleting/recreating a shared path between tests serves stale entries and causes intermittent `No module named` failures. `std::filesystem::temp_directory_path()` is the base.
+- **Python module names must be unique per test** — `sys.modules` caches imported modules for the whole process; a repeated name reuses a stale module.
+- **Environment variables**: if a test sets `HOME`/etc., save the old value in `SetUp` and restore in `TearDown` (restore must run even on assertion failure — put it in `TearDown`, not inline after the call).
+- **CWD**: tests that depend on relative paths must `chdir` into their fixture dir in `SetUp` and restore in `TearDown`, or use absolute paths — never assume the binary runs from the repo root.
+
+### GIL / Refcount Discipline for Python-Embedding Tests
+- The engine acquires the GIL internally via `GilGuard`; tests call only the public API.
+- When a test exercises a fallback/exception path, a subsequent test that imports the same module may crash if the engine leaks or double-releases refs. A segfault that appears only in full-suite runs (not in isolation) is almost always a refcount bug in `python_plugin_engine.cpp` — run the suite under gdb (`gdb -batch -ex run -ex bt ./build/<target>`) to confirm.
+
+### Verification
+- Before committing any change: build with `cmake --build build -j"$(nproc)"` and run `ctest --test-dir build --output-on-failure` (all targets must pass).
+- Run the full suite, not just the changed target, after touching shared code (`tf_tree.cpp`, `cdr_utils.hpp`, `python_plugin_engine.cpp` are shared by multiple targets).
+

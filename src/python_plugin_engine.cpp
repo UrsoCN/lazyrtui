@@ -238,11 +238,11 @@ PythonPluginEngine::render_message(const std::string &module_name,
   Py_DECREF(loads_func);
 
   if (!msg_dict) {
-    std::string err = fetch_python_error();
-    Py_DECREF(json_module);
-    Py_DECREF(render_func);
-    // If JSON parsing fails, fallback to empty dict
-    PyErr_Clear();
+    // Clears the error indicator (PyErr_Fetch). json_module and render_func
+    // are still needed below, so their refs are NOT released here (an early
+    // DECREF would double-release them later, free the json module while
+    // sys.modules still references it, and crash the next import).
+    fetch_python_error();
     msg_dict = PyDict_New();
   }
 

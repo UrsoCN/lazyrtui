@@ -150,9 +150,81 @@ TEST_F(PythonPluginEngineTest, RenderMessageStatePersistsPerTopic) {
       "    return {'type': 'text', 'content': str(state['n'])}\n");
   PythonPluginEngine engine;
   ASSERT_TRUE(engine.load_plugin_file(path));
-  EXPECT_EQ(engine.render_message("plugin_state", "/a", "{}")["content"], "1");
-  EXPECT_EQ(engine.render_message("plugin_state", "/a", "{}")["content"], "2");
-  EXPECT_EQ(engine.render_message("plugin_state", "/b", "{}")["content"], "1");
+  const nlohmann::json first =
+      engine.render_message("plugin_state", "/a", "{}");
+  const nlohmann::json second =
+      engine.render_message("plugin_state", "/a", "{}");
+  const nlohmann::json other =
+      engine.render_message("plugin_state", "/b", "{}");
+  ASSERT_TRUE(first.is_object());
+  ASSERT_TRUE(second.is_object());
+  ASSERT_TRUE(other.is_object());
+  EXPECT_EQ(first["content"], "1");   // State dict persists per topic.
+  EXPECT_EQ(second["content"], "2");
+  EXPECT_EQ(other["content"], "1");   // Different topic -> fresh state.
+}
+
+TEST_F(PythonPluginEngineTest, ReloadSameModuleNameReplacesPlugin) {
+  // Loading a second file with the same module stem must replace the stored
+  // plugin (single entry) instead of duplicating it.
+  const std::string first_path = WritePlugin(
+      "plugin_reload",
+      "def match(topic, msg):\n"
+      "    return topic == '/one'\n"
+      "def render(msg, state):\n"
+      "    return {'type': 'text', 'content': 'first'}\n");
+  const std::string second_path = WritePlugin(
+      "plugin_reload",
+      "def match(topic, msg):\n"
+      "    return topic == '/two'\n"
+      "def render(msg, state):\n"
+      "    return {'type': 'text', 'content': 'second'}\n");
+  PythonPluginEngine engine;
+  ASSERT_TRUE(engine.load_plugin_file(first_path));
+  ASSERT_TRUE(engine.load_plugin_file(second_path));
+  const auto &plugins = engine.loaded_plugins();
+  ASSERT_EQ(plugins.size(), 1u);             // Replaced, not duplicated.
+  EXPECT_EQ(plugins[0].file_path, second_path);
+  EXPECT_EQ(engine.find_matching_plugin("/two", ""), "plugin_reload");
+  EXPECT_EQ(engine.find_matching_plugin("/one", ""), "");
+}
+
+TEST_F(PythonPluginEngineTest, FindMatchingPluginSkipsRaisingMatch) {
+  // A plugin whose match() raises must be skipped (error swallowed) and the
+  // search continues; here the second plugin is the actual match.
+  const std::string bad_path = WritePlugin(
+      "plugin_raisematch",
+      "def match(topic, msg):\n"
+      "    raise RuntimeError('match exploded')\n"
+      "def render(msg, state):\n"
+      "    return {}\n");
+  const std::string good_path = WritePlugin(
+      "plugin_goodmatch",
+      "def match(topic, msg):\n"
+      "    return topic == '/demo'\n"
+      "def render(msg, state):\n"
+      "    return {}\n");
+  PythonPluginEngine engine;
+  ASSERT_TRUE(engine.load_plugin_file(bad_path));
+  ASSERT_TRUE(engine.load_plugin_file(good_path));
+  EXPECT_EQ(engine.find_matching_plugin("/demo", ""), "plugin_goodmatch");
+}
+
+TEST_F(PythonPluginEngineTest, RenderMessageNonDictReturnIsSerialized) {
+  // render() returning a bare string is JSON-serializable and must come back
+  // as a JSON string node, not an error.
+  const std::string path = WritePlugin(
+      "plugin_strreturn",
+      "def match(topic, msg):\n"
+      "    return False\n"
+      "def render(msg, state):\n"
+      "    return 'plain string'\n");
+  PythonPluginEngine engine;
+  ASSERT_TRUE(engine.load_plugin_file(path));
+  const nlohmann::json spec =
+      engine.render_message("plugin_strreturn", "/demo", "{}");
+  ASSERT_TRUE(spec.is_string());
+  EXPECT_EQ(spec.get<std::string>(), "plain string");
 }
 
 TEST_F(PythonPluginEngineTest, RenderMessageUnknownModuleReportsError) {
@@ -166,6 +238,10 @@ TEST_F(PythonPluginEngineTest, RenderMessageUnknownModuleReportsError) {
 }
 
 TEST_F(PythonPluginEngineTest, RenderMessageInvalidJsonFallsBackToEmpty) {
+  // NOTE: this fallback path must run before the other render tests. Under the
+  // pre-fix double-DECREF bug it frees json while sys.modules["json"] still
+  // references it, and the NEXT render_message's PyImport_ImportModule("json")
+  // crashes — so the regression catch depends on declaration order.
   const std::string path = WritePlugin(
       "plugin_badjson",
       "def match(topic, msg):\n"

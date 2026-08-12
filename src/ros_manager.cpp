@@ -808,7 +808,10 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
     if (member.is_array_) {
         align_offset(4);
         uint32_t count = member.array_size_;
-        if (!member.is_upper_bound_ && count == 0) {
+        // Read the actual element count from the wire for every non-fixed
+        // array (unbounded AND bounded sequences); only fixed arrays have no
+        // count on the wire.
+        if (member.is_upper_bound_ || count == 0) {
             if (offset + 4 > size) return false;
             std::memcpy(&count, buffer + offset, 4);
             if (swap_bytes) count = cdr_byte_swap(count);

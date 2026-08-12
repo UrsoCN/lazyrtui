@@ -61,6 +61,8 @@ find_package(tf2_msgs REQUIRED)
 find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
+find_package(rcl REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 
 add_executable(lazyrtui
   src/main.cpp
@@ -99,6 +101,8 @@ ament_target_dependencies(lazyrtui
   rosidl_typesupport_introspection_cpp
   rosidl_typesupport_cpp
   rcl_interfaces
+  rcl
+  ament_index_cpp
 )
 
 install(TARGETS lazyrtui

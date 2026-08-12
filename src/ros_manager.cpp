@@ -15,6 +15,20 @@
 #include <cmath>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
 #include <rosidl_typesupport_introspection_cpp/field_types.hpp>
+#include <ament_index_cpp/get_packages_with_prefixes.hpp>
+#include <ament_index_cpp/get_package_share_directory.hpp>
+#include <rcl/error_handling.h>
+#include <rcl/graph.h>
+#include <rcl/service.h>
+#include <rosidl_typesupport_introspection_cpp/service_introspection.hpp>
+#include <rosidl_runtime_cpp/message_initialization.hpp>
+#include <nlohmann/json.hpp>
+#include <rmw/serialized_message.h>
+#include <rmw/types.h>
+#include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 
 using namespace std::chrono_literals;
 
@@ -302,6 +316,295 @@ static const ::rosidl_typesupport_introspection_cpp::MessageMembers* get_message
     const auto* members = static_cast<const ::rosidl_typesupport_introspection_cpp::MessageMembers*>(ts->data);
     g_typesupport_cache[type_str] = {handle, members};
     return members;
+}
+
+struct ServiceTypeSupportHandleInfo {
+    void* lib_handle = nullptr;
+    const rosidl_service_type_support_t* type_support = nullptr;
+    const ::rosidl_typesupport_introspection_cpp::ServiceMembers* members = nullptr;
+};
+
+static std::map<std::string, ServiceTypeSupportHandleInfo> g_service_typesupport_cache;
+
+// Loads the runtime introspection typesupport for a service ("pkg/srv/Name").
+// Returns the ServiceMembers (request/response field metadata) and, via
+// out_ts, the rosidl_service_type_support_t* needed by rcl_client_init.
+static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service_members(
+    const std::string& type_str, const rosidl_service_type_support_t** out_ts) {
+    // Shares the same guard as the message cache: worker threads call this.
+    std::lock_guard<std::mutex> lock(g_typesupport_mutex);
+    auto it = g_service_typesupport_cache.find(type_str);
+    if (it != g_service_typesupport_cache.end()) {
+        if (out_ts) *out_ts = it->second.type_support;
+        return it->second.members;
+    }
+
+    std::string pkg, srv_name;
+    size_t slash1 = type_str.find('/');
+    if (slash1 == std::string::npos) return nullptr;
+    pkg = type_str.substr(0, slash1);
+    size_t slash2 = type_str.find('/', slash1 + 1);
+    srv_name = (slash2 != std::string::npos) ? type_str.substr(slash2 + 1)
+                                             : type_str.substr(slash1 + 1);
+    if (pkg.empty() || srv_name.empty()) return nullptr;
+
+    std::string lib_name =
+        "lib" + pkg + "__rosidl_typesupport_introspection_cpp.so";
+    void* handle = dlopen(lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+    if (!handle) return nullptr;
+
+    std::string sym_name =
+        "rosidl_typesupport_introspection_cpp__get_service_type_support_handle__" +
+        pkg + "__srv__" + srv_name;
+    using GetTSFn = const rosidl_service_type_support_t* (*)();
+    GetTSFn get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
+    if (!get_ts_fn) {
+        dlclose(handle);
+        return nullptr;
+    }
+
+    const rosidl_service_type_support_t* ts = get_ts_fn();
+    if (!ts || !ts->data) {
+        dlclose(handle);
+        return nullptr;
+    }
+
+    const auto* members = static_cast<
+        const ::rosidl_typesupport_introspection_cpp::ServiceMembers*>(ts->data);
+    g_service_typesupport_cache[type_str] = {handle, ts, members};
+    if (out_ts) *out_ts = ts;
+    return members;
+}
+
+// --- Introspection-driven message struct construction ----------------------
+// Fills the (already initialized) C++ message struct at `base` from `obj`,
+// writing each field at its introspection offset_. Returns false on a missing
+// or type-invalid field so requests never silently go out half-filled.
+
+static bool fill_struct_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
+                              void* field, const nlohmann::json& value) {
+    using namespace ::rosidl_typesupport_introspection_cpp;
+
+    if (member.is_array_) {
+        if (!value.is_array()) return false;
+        const size_t count = value.size();
+        const bool is_fixed = (member.is_upper_bound_ || member.array_size_ > 0);
+        if (!is_fixed) {
+            member.resize_function(field, count);  // Default-constructs elements.
+        } else if (member.is_upper_bound_ && count > member.array_size_) {
+            return false;  // Exceeds the declared upper bound.
+        } else if (!member.is_upper_bound_ && count != member.array_size_) {
+            return false;  // Fixed array size mismatch.
+        }
+        MessageMember elem_member = member;
+        elem_member.is_array_ = false;
+        elem_member.array_size_ = 0;
+        for (size_t j = 0; j < count; ++j) {
+            if (!fill_struct_field(elem_member, member.get_function(field, j),
+                                   value[j])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    switch (member.type_id_) {
+        case ROS_TYPE_BOOLEAN: {
+            if (!value.is_boolean()) return false;
+            *static_cast<bool*>(field) = value.get<bool>();
+            return true;
+        }
+        case ROS_TYPE_UINT8: {
+            if (!value.is_number_unsigned() && !value.is_number_integer()) return false;
+            *static_cast<uint8_t*>(field) = value.get<uint8_t>();
+            return true;
+        }
+        case ROS_TYPE_INT8:
+        case ROS_TYPE_CHAR: {
+            if (!value.is_number_integer() && !value.is_number_unsigned()) return false;
+            *static_cast<int8_t*>(field) = value.get<int8_t>();
+            return true;
+        }
+        case ROS_TYPE_UINT16: {
+            if (!value.is_number_unsigned() && !value.is_number_integer()) return false;
+            *static_cast<uint16_t*>(field) = value.get<uint16_t>();
+            return true;
+        }
+        case ROS_TYPE_INT16: {
+            if (!value.is_number_integer() && !value.is_number_unsigned()) return false;
+            *static_cast<int16_t*>(field) = value.get<int16_t>();
+            return true;
+        }
+        case ROS_TYPE_UINT32: {
+            if (!value.is_number_unsigned() && !value.is_number_integer()) return false;
+            *static_cast<uint32_t*>(field) = value.get<uint32_t>();
+            return true;
+        }
+        case ROS_TYPE_INT32: {
+            if (!value.is_number_integer() && !value.is_number_unsigned()) return false;
+            *static_cast<int32_t*>(field) = value.get<int32_t>();
+            return true;
+        }
+        case ROS_TYPE_UINT64: {
+            if (!value.is_number_unsigned() && !value.is_number_integer()) return false;
+            *static_cast<uint64_t*>(field) = value.get<uint64_t>();
+            return true;
+        }
+        case ROS_TYPE_INT64: {
+            if (!value.is_number_integer() && !value.is_number_unsigned()) return false;
+            *static_cast<int64_t*>(field) = value.get<int64_t>();
+            return true;
+        }
+        case ROS_TYPE_FLOAT: {
+            if (!value.is_number()) return false;
+            *static_cast<float*>(field) = value.get<float>();
+            return true;
+        }
+        case ROS_TYPE_DOUBLE: {
+            if (!value.is_number()) return false;
+            *static_cast<double*>(field) = value.get<double>();
+            return true;
+        }
+        case ROS_TYPE_STRING: {
+            if (!value.is_string()) return false;
+            std::string str = value.get<std::string>();
+            if (member.string_upper_bound_ > 0 &&
+                str.size() + 1 > member.string_upper_bound_) {
+                return false;  // Exceeds the declared upper bound.
+            }
+            static_cast<std::string*>(field)->assign(str);
+            return true;
+        }
+        case ROS_TYPE_MESSAGE: {
+            if (!value.is_object()) return false;
+            if (!member.members_ || !member.members_->data) return false;
+            const auto* sub_members = static_cast<const MessageMembers*>(member.members_->data);
+            for (uint32_t i = 0; i < sub_members->member_count_; ++i) {
+                const auto& sub_member = sub_members->members_[i];
+                auto it = value.find(sub_member.name_);
+                if (it == value.end()) return false;  // Missing field.
+                if (!fill_struct_field(sub_member,
+                                       static_cast<char*>(field) + sub_member.offset_,
+                                       *it)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        default:
+            return false;  // Unsupported type (e.g. WSTRING): fail loudly.
+    }
+}
+
+static bool fill_struct_members(const ::rosidl_typesupport_introspection_cpp::MessageMembers* members,
+                                void* base, const nlohmann::json& obj) {
+    if (!members || !obj.is_object()) return false;
+    for (uint32_t i = 0; i < members->member_count_; ++i) {
+        const auto& member = members->members_[i];
+        auto it = obj.find(member.name_);
+        if (it == obj.end()) return false;  // Missing field: reject loudly.
+        if (!fill_struct_field(member, static_cast<char*>(base) + member.offset_, *it)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// --- Introspection-driven message struct reading (host struct -> JSON) -----
+
+static void read_struct_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
+                              const void* field, std::stringstream& ss, int indent_level) {
+    using namespace ::rosidl_typesupport_introspection_cpp;
+
+    if (member.is_array_) {
+        const size_t count = member.size_function(field);
+        ss << "[";
+        MessageMember elem_member = member;
+        elem_member.is_array_ = false;
+        elem_member.array_size_ = 0;
+        for (size_t j = 0; j < count; ++j) {
+            if (j > 0) ss << ", ";
+            read_struct_field(elem_member, member.get_const_function(field, j), ss, indent_level);
+        }
+        ss << "]";
+        return;
+    }
+
+    switch (member.type_id_) {
+        case ROS_TYPE_BOOLEAN:
+            ss << (*static_cast<const bool*>(field) ? "true" : "false");
+            break;
+        case ROS_TYPE_UINT8:
+            ss << static_cast<unsigned>(*static_cast<const uint8_t*>(field));
+            break;
+        case ROS_TYPE_INT8:
+        case ROS_TYPE_CHAR:
+            ss << static_cast<int>(*static_cast<const int8_t*>(field));
+            break;
+        case ROS_TYPE_UINT16:
+            ss << *static_cast<const uint16_t*>(field);
+            break;
+        case ROS_TYPE_INT16:
+            ss << *static_cast<const int16_t*>(field);
+            break;
+        case ROS_TYPE_UINT32:
+            ss << *static_cast<const uint32_t*>(field);
+            break;
+        case ROS_TYPE_INT32:
+            ss << *static_cast<const int32_t*>(field);
+            break;
+        case ROS_TYPE_UINT64:
+            ss << *static_cast<const uint64_t*>(field);
+            break;
+        case ROS_TYPE_INT64:
+            ss << *static_cast<const int64_t*>(field);
+            break;
+        case ROS_TYPE_FLOAT:
+            ss << *static_cast<const float*>(field);
+            break;
+        case ROS_TYPE_DOUBLE:
+            ss << *static_cast<const double*>(field);
+            break;
+        case ROS_TYPE_STRING:
+            ss << "\"" << *static_cast<const std::string*>(field) << "\"";
+            break;
+        case ROS_TYPE_MESSAGE: {
+            if (member.members_ && member.members_->data) {
+                const auto* sub_members = static_cast<const MessageMembers*>(member.members_->data);
+                std::string indent(indent_level * 2, ' ');
+                ss << "{\n";
+                for (uint32_t i = 0; i < sub_members->member_count_; ++i) {
+                    const auto& sub_member = sub_members->members_[i];
+                    if (i > 0) ss << ",\n";
+                    ss << indent << "  \"" << sub_member.name_ << "\": ";
+                    read_struct_field(sub_member,
+                                      static_cast<const char*>(field) + sub_member.offset_,
+                                      ss, indent_level + 1);
+                }
+                ss << "\n" << indent << "}";
+            } else {
+                ss << "null";
+            }
+            break;
+        }
+        default:
+            ss << "null";
+            break;
+    }
+}
+
+static void read_struct_members(const ::rosidl_typesupport_introspection_cpp::MessageMembers* members,
+                                const void* base, std::stringstream& ss, int indent_level) {
+    if (!members) return;
+    std::string indent(indent_level * 2, ' ');
+    ss << "{\n";
+    for (uint32_t i = 0; i < members->member_count_; ++i) {
+        const auto& member = members->members_[i];
+        if (i > 0) ss << ",\n";
+        ss << indent << "  \"" << member.name_ << "\": ";
+        read_struct_field(member, static_cast<const char*>(base) + member.offset_, ss, indent_level + 1);
+    }
+    ss << "\n" << indent << "}";
 }
 
 static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
@@ -603,69 +906,184 @@ bool ROS2Manager::is_topic_subscribed(const std::string& topic) const {
     return impl_->subscriptions_.find(topic) != impl_->subscriptions_.end();
 }
 
-static std::string exec(const char* cmd) {
-    std::array<char, 128> buffer;
-    std::string result;
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd, "r"), pclose);
-    if (!pipe) {
-        throw std::runtime_error("popen() failed!");
-    }
-    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();
-    }
-    return result;
-}
-
 void ROS2Manager::call_service_async(const std::string& service_name, const std::string& type_str,
                                      const std::string& request_json, ServiceCallback callback) {
-    std::thread([service_name, type_str, request_json, callback]() {
+    std::thread([this, service_name, type_str, request_json, callback]() {
         auto start_time = std::chrono::steady_clock::now();
-        try {
-            std::string escaped_json = request_json;
-            size_t pos = 0;
-            while ((pos = escaped_json.find("'", pos)) != std::string::npos) {
-                escaped_json.replace(pos, 1, "'\\''");
-                pos += 4;
-            }
-            
-            std::string cmd = "ros2 service call " + service_name + " " + type_str + " '" + escaped_json + "'";
-            std::string out = exec(cmd.c_str());
-            
-            auto end_time = std::chrono::steady_clock::now();
-            double elapsed = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-            
-            callback(true, out, elapsed);
-        } catch (const std::exception& e) {
-            auto end_time = std::chrono::steady_clock::now();
-            double elapsed = std::chrono::duration<double, std::milli>(end_time - start_time).count();
-            callback(false, e.what(), elapsed);
+        auto elapsed_ms = [&start_time]() {
+            return std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start_time)
+                .count();
+        };
+
+        // Node lifetime guard: the detached worker may outlive stop(); the
+        // managed task queue lands with Issue #5.
+        if (!rclcpp::ok() || stop_requested_.load()) {
+            callback(false, "ROS 2 is shutting down", elapsed_ms());
+            return;
         }
+
+        const rosidl_service_type_support_t* ts = nullptr;
+        const auto* members = get_service_members(type_str, &ts);
+        if (!members || !ts) {
+            callback(false, "Failed to load service typesupport for '" + type_str + "'",
+                     elapsed_ms());
+            return;
+        }
+
+        nlohmann::json req;
+        try {
+            req = nlohmann::json::parse(request_json);
+        } catch (const std::exception& e) {
+            callback(false, std::string("Invalid request JSON: ") + e.what(), elapsed_ms());
+            return;
+        }
+        if (!req.is_object()) {
+            callback(false, "Request JSON must be an object", elapsed_ms());
+            return;
+        }
+
+        rcl_node_t* node_handle =
+            impl_->node_->get_node_base_interface()->get_rcl_node_handle();
+
+        // RAII: rcl_client_fini needs the node handle and runs on every exit.
+        struct ClientRaii {
+            rcl_client_t client = rcl_get_zero_initialized_client();
+            rcl_node_t* node = nullptr;
+            bool initialized = false;
+            ~ClientRaii() {
+                if (initialized) rcl_client_fini(&client, node);
+            }
+        } client_raii;
+        client_raii.node = node_handle;
+
+        rcl_client_options_t options = rcl_client_get_default_options();
+        rcl_ret_t ret = rcl_client_init(&client_raii.client, node_handle, ts,
+                                        service_name.c_str(), &options);
+        if (ret != RCL_RET_OK) {
+            callback(false, std::string("rcl_client_init failed: ") + rcl_get_error_string().str,
+                     elapsed_ms());
+            rcl_reset_error();
+            return;
+        }
+        client_raii.initialized = true;
+
+        // Wait for a server to become available (bounded; mirrors `ros2 service call`).
+        bool available = false;
+        auto avail_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (std::chrono::steady_clock::now() < avail_deadline && rclcpp::ok() &&
+               !stop_requested_.load()) {
+            if (rcl_service_server_is_available(node_handle, &client_raii.client,
+                                                &available) != RCL_RET_OK)
+                break;
+            if (available) break;
+            std::this_thread::sleep_for(50ms);
+        }
+        if (!available) {
+            callback(false, "Service '" + service_name + "' not available", elapsed_ms());
+            return;
+        }
+
+        // Build the request message struct from JSON via introspection.
+        const auto* req_members = members->request_members_;
+        std::vector<uint8_t> req_storage(req_members->size_of_);
+        void* req_struct = req_storage.data();
+        req_members->init_function(req_struct,
+                                   rosidl_runtime_cpp::MessageInitialization::ALL);
+
+        bool filled = false;
+        try {
+            filled = fill_struct_members(req_members, req_struct, req);
+        } catch (const std::exception&) {
+            filled = false;
+        }
+        if (!filled) {
+            req_members->fini_function(req_struct);
+            callback(false, "Failed to build request (missing or invalid fields)", elapsed_ms());
+            return;
+        }
+
+        int64_t sequence_number = 0;
+        ret = rcl_send_request(&client_raii.client, req_struct, &sequence_number);
+        // Serialization is synchronous; the request struct can be destroyed now.
+        req_members->fini_function(req_struct);
+        if (ret != RCL_RET_OK) {
+            callback(false, std::string("rcl_send_request failed: ") + rcl_get_error_string().str,
+                     elapsed_ms());
+            rcl_reset_error();
+            return;
+        }
+
+        // Take the response struct (poll, bounded 10 s).
+        const auto* resp_members = members->response_members_;
+        std::vector<uint8_t> resp_storage(resp_members->size_of_);
+        void* resp_struct = resp_storage.data();
+        resp_members->init_function(resp_struct,
+                                    rosidl_runtime_cpp::MessageInitialization::ALL);
+
+        const auto resp_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        bool got_response = false;
+        std::string take_error;
+        while (std::chrono::steady_clock::now() < resp_deadline && rclcpp::ok() &&
+               !stop_requested_.load()) {
+            rmw_request_id_t resp_id;
+            rcl_ret_t tr = rcl_take_response(&client_raii.client, &resp_id, resp_struct);
+            if (tr == RCL_RET_OK) {
+                got_response = true;
+                break;
+            }
+            if (tr != RCL_RET_CLIENT_TAKE_FAILED) {
+                take_error = std::string("rcl_take_response failed: ") + rcl_get_error_string().str;
+                rcl_reset_error();
+                break;
+            }
+            std::this_thread::sleep_for(25ms);
+        }
+
+        if (!got_response) {
+            resp_members->fini_function(resp_struct);
+            callback(false,
+                     take_error.empty() ? "Service call timed out after 10s" : take_error,
+                     elapsed_ms());
+            return;
+        }
+
+        // Read the response struct directly into JSON text.
+        std::stringstream ss;
+        read_struct_members(resp_members, resp_struct, ss, 0);
+        resp_members->fini_function(resp_struct);
+        callback(true, ss.str(), elapsed_ms());
     }).detach();
 }
 
 std::map<std::string, std::vector<std::string>> ROS2Manager::get_interfaces_tree() {
     std::map<std::string, std::vector<std::string>> result;
     try {
-        std::string out = exec("ros2 interface list");
-        std::istringstream iss(out);
-        std::string line;
-        while (std::getline(iss, line)) {
-            if (line.empty()) continue;
-            if (line.find("Messages:") != std::string::npos ||
-                line.find("Services:") != std::string::npos ||
-                line.find("Actions:") != std::string::npos) {
-                continue;
+        const auto packages = ament_index_cpp::get_packages_with_prefixes();
+        for (const auto& [pkg, prefix] : packages) {
+            (void)prefix;
+            std::string share_dir;
+            try {
+                share_dir = ament_index_cpp::get_package_share_directory(pkg);
+            } catch (const std::exception&) {
+                continue;  // Package share dir unavailable.
             }
-            
-            size_t start = line.find_first_not_of(" \t");
-            if (start != std::string::npos) {
-                std::string iface = line.substr(start);
-                auto slash_pos = iface.find('/');
-                if (slash_pos != std::string::npos) {
-                    std::string pkg = iface.substr(0, slash_pos);
-                    result[pkg].push_back(iface);
+            std::vector<std::string> entries;
+            for (const char* sub : {"msg", "srv", "action"}) {
+                std::filesystem::path dir = std::filesystem::path(share_dir) / sub;
+                std::error_code ec;
+                if (!std::filesystem::is_directory(dir, ec)) continue;
+                std::string expected_ext = std::string(".") + sub;
+                for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                    if (!entry.is_regular_file(ec)) continue;
+                    if (entry.path().extension().string() == expected_ext) {
+                        entries.push_back(pkg + "/" + sub + "/" +
+                                          entry.path().stem().string());
+                    }
                 }
             }
+            std::sort(entries.begin(), entries.end());
+            result[pkg] = std::move(entries);
         }
     } catch (...) {
     }
@@ -674,8 +1092,43 @@ std::map<std::string, std::vector<std::string>> ROS2Manager::get_interfaces_tree
 
 std::string ROS2Manager::get_interface_detail(const std::string& type_str) {
     try {
-        std::string cmd = "ros2 interface show " + type_str;
-        return exec(cmd.c_str());
+        // Accept "pkg/msg/Type", "pkg/srv/Type", "pkg/action/Type", or "pkg/Type".
+        std::string pkg, kind, name;
+        size_t s1 = type_str.find('/');
+        if (s1 == std::string::npos) return "Error: invalid type '" + type_str + "'";
+        pkg = type_str.substr(0, s1);
+        size_t s2 = type_str.find('/', s1 + 1);
+        if (s2 != std::string::npos) {
+            kind = type_str.substr(s1 + 1, s2 - s1 - 1);
+            name = type_str.substr(s2 + 1);
+        } else {
+            name = type_str.substr(s1 + 1);
+        }
+        if (pkg.empty() || name.empty()) return "Error: invalid type '" + type_str + "'";
+
+        std::vector<std::string> kinds;
+        std::vector<std::string> exts;
+        if (!kind.empty()) {
+            kinds = {kind};
+            exts = {"." + kind};
+        } else {
+            kinds = {"msg", "srv", "action"};
+            exts = {".msg", ".srv", ".action"};
+        }
+
+        const std::string share_dir = ament_index_cpp::get_package_share_directory(pkg);
+        for (size_t i = 0; i < kinds.size(); ++i) {
+            std::filesystem::path file =
+                std::filesystem::path(share_dir) / kinds[i] / (name + exts[i]);
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(file, ec)) continue;
+            std::ifstream in(file);
+            if (!in) continue;
+            std::stringstream ss;
+            ss << in.rdbuf();
+            return ss.str();
+        }
+        return "Error: interface not found: '" + type_str + "'";
     } catch (const std::exception& e) {
         return std::string("Error: ") + e.what();
     }

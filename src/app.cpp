@@ -486,10 +486,18 @@ Component LazyRTUIApp::make_services_tab() {
       selected = snap->services_list[selected_service_];
     }
 
+    // service_response_ will be written from a service-call worker thread;
+    // copy under the data mutex for a safe read here.
+    std::string response;
+    {
+      std::lock_guard<std::mutex> lock(data_mutex_);
+      response = service_response_;
+    }
+
     return window(text("Service Caller: " + selected),
                   vbox({text("Request JSON:"), input_json->Render() | border,
                         call_btn->Render(), separator(), text("Response:"),
-                        text(service_response_) | borderLight})) |
+                        text(response) | borderLight})) |
            (service_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 

@@ -805,15 +805,24 @@ Component LazyRTUIApp::make_tf_tab() {
 }
 
 Component LazyRTUIApp::make_about_tab() {
-  auto left_pane = Renderer([]() {
+  auto left_pane = Renderer([this]() {
+    // Keybindings are user-configurable; render the actual bindings.
+    auto kb = [this](const std::string &key, const char *desc) {
+      std::string k = key.empty() ? "-" : key;
+      if (k.size() < 2) k += " ";
+      return text("  " + k + ": " + desc);
+    };
     return window(text("About"),
                   vbox({text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
                         text("ROS 2 Distro: Unknown"), separator(),
                         text("Keybindings:"), text("  1-8: Switch tabs"),
-                        text("  w: Toggle focus"), text("  r: Refresh"),
-                        text("  e: Echo topic"), text("  c: Call service"),
-                        text("  g: Send action goal"), text("  ?: Help"),
-                        text("  q: Quit")})) |
+                        kb(config_.keybindings.switch_focus, "Toggle focus"),
+                        kb(config_.keybindings.refresh, "Refresh"),
+                        kb(config_.keybindings.echo_topic, "Echo topic"),
+                        kb(config_.keybindings.call_service, "Call service"),
+                        kb(config_.keybindings.send_goal, "Send action goal"),
+                        kb(config_.keybindings.help, "Help"),
+                        kb(config_.keybindings.quit, "Quit")})) |
            borderLight;
   });
 
@@ -860,28 +869,48 @@ void LazyRTUIApp::run() {
                                                                : Color::Red),
               text(" ")});
 
-    // Footer
-    auto footer = hbox({text(" 1-8:Tab  w:Focus  r:Refresh  e:Echo  c:Call  "
-                             "g:Goal  ?:Help  q:Quit ") |
-                        inverted | flex});
+    // Footer (keybindings are user-configurable).
+    auto kb_f = [this](const std::string &key, const char *label) {
+      std::string k = key.empty() ? "-" : key;
+      return std::string("  ") + k + ":" + label;
+    };
+    std::string footer_text = " 1-8:Tab";
+    footer_text += kb_f(config_.keybindings.switch_focus, "Focus");
+    footer_text += kb_f(config_.keybindings.refresh, "Refresh");
+    footer_text += kb_f(config_.keybindings.echo_topic, "Echo");
+    footer_text += kb_f(config_.keybindings.call_service, "Call");
+    footer_text += kb_f(config_.keybindings.send_goal, "Goal");
+    footer_text += kb_f(config_.keybindings.help, "Help");
+    footer_text += kb_f(config_.keybindings.quit, "Quit ");
+    footer_text += " ";
+    auto footer = hbox({text(footer_text) | inverted | flex});
 
     auto main_view = vbox({header, separator(), tab_container->Render() | flex,
                            separator(), footer});
 
     if (show_help_) {
+      // Keybindings are user-configurable; render the actual bindings.
+      auto kb = [this](const std::string &key, const char *desc) {
+        std::string k = key.empty() ? "-" : key;
+        if (k.size() < 2) k += " ";
+        return text(" " + k + " : " + desc);
+      };
+      const std::string help_key =
+          config_.keybindings.help.empty() ? "?" : config_.keybindings.help;
       auto help_modal =
           window(
               text(" Help ") | bold,
               vbox({text("Keybindings:"), separator(),
-                    text(" 1-8 : Switch Tab"), text(" w   : Toggle pane focus"),
+                    text(" 1-8 : Switch Tab"),
+                    kb(config_.keybindings.switch_focus, "Toggle pane focus"),
                     text(" j/k : Navigate lists (vim style)"),
-                    text(" r   : Manual refresh"),
-                    text(" e   : Echo topic (Topics tab)"),
-                    text(" c   : Call service (Services tab)"),
-                    text(" g   : Send goal (Actions tab)"),
-                    text(" ?   : Toggle this help menu"),
-                    text(" q   : Quit application"), text(""),
-                    text("Press '?' or 'Esc' to dismiss") | dim})) |
+                    kb(config_.keybindings.refresh, "Manual refresh"),
+                    kb(config_.keybindings.echo_topic, "Echo topic (Topics tab)"),
+                    kb(config_.keybindings.call_service, "Call service (Services tab)"),
+                    kb(config_.keybindings.send_goal, "Send goal (Actions tab)"),
+                    kb(config_.keybindings.help, "Toggle this help menu"),
+                    kb(config_.keybindings.quit, "Quit application"), text(""),
+                    text("Press '" + help_key + "' or 'Esc' to dismiss") | dim})) |
           clear_under | center;
       return dbox({main_view, help_modal});
     }

@@ -758,13 +758,28 @@ static void read_struct_members(const ::rosidl_typesupport_introspection_cpp::Me
     ss << "\n" << indent << "}";
 }
 
+// CDR stream endianness vs host: the 4-byte CDR encapsulation header's first
+// byte is 0x01 (CDR_LE) or 0x00 (CDR_BE). Multi-byte reads must be byte-swapped
+// when the stream order differs from the host.
+static const bool g_host_is_little_endian = []() {
+    const union { uint16_t u; uint8_t b[2]; } probe = {0x0102};
+    return probe.b[0] == 0x02;
+}();
+
+template <typename T>
+static T cdr_byte_swap(T value) {
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(&value);
+    std::reverse(bytes, bytes + sizeof(T));
+    return value;
+}
+
 static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
                             const uint8_t* buffer, size_t size, size_t& offset,
-                            std::stringstream& ss, int indent_level);
+                            std::stringstream& ss, int indent_level, bool swap_bytes);
 
 static bool parse_cdr_members(const ::rosidl_typesupport_introspection_cpp::MessageMembers* members,
                              const uint8_t* buffer, size_t size, size_t& offset,
-                             std::stringstream& ss, int indent_level) {
+                             std::stringstream& ss, int indent_level, bool swap_bytes) {
     if (!members) return false;
     std::string indent(indent_level * 2, ' ');
     ss << "{\n";
@@ -772,7 +787,8 @@ static bool parse_cdr_members(const ::rosidl_typesupport_introspection_cpp::Mess
         const auto& member = members->members_[i];
         if (i > 0) ss << ",\n";
         ss << indent << "  \"" << member.name_ << "\": ";
-        if (!parse_cdr_field(member, buffer, size, offset, ss, indent_level + 1)) {
+        if (!parse_cdr_field(member, buffer, size, offset, ss, indent_level + 1,
+                             swap_bytes)) {
             ss << "null";
         }
     }
@@ -782,7 +798,7 @@ static bool parse_cdr_members(const ::rosidl_typesupport_introspection_cpp::Mess
 
 static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
                             const uint8_t* buffer, size_t size, size_t& offset,
-                            std::stringstream& ss, int indent_level) {
+                            std::stringstream& ss, int indent_level, bool swap_bytes) {
     using namespace rosidl_typesupport_introspection_cpp;
 
     auto align_offset = [&](size_t align) {
@@ -795,6 +811,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
         if (!member.is_upper_bound_ && count == 0) {
             if (offset + 4 > size) return false;
             std::memcpy(&count, buffer + offset, 4);
+            if (swap_bytes) count = cdr_byte_swap(count);
             offset += 4;
         }
 
@@ -805,7 +822,8 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             ::rosidl_typesupport_introspection_cpp::MessageMember elem_member = member;
             elem_member.is_array_ = false;
             elem_member.array_size_ = 0;
-            if (!parse_cdr_field(elem_member, buffer, size, offset, ss, indent_level)) {
+            if (!parse_cdr_field(elem_member, buffer, size, offset, ss, indent_level,
+                                 swap_bytes)) {
                 ss << "null";
             }
         }
@@ -841,6 +859,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 2 > size) return false;
             uint16_t val = 0;
             std::memcpy(&val, buffer + offset, 2);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 2;
             ss << val;
             return true;
@@ -850,6 +869,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 2 > size) return false;
             int16_t val = 0;
             std::memcpy(&val, buffer + offset, 2);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 2;
             ss << val;
             return true;
@@ -859,6 +879,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 4 > size) return false;
             uint32_t val = 0;
             std::memcpy(&val, buffer + offset, 4);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 4;
             ss << val;
             return true;
@@ -868,6 +889,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 4 > size) return false;
             int32_t val = 0;
             std::memcpy(&val, buffer + offset, 4);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 4;
             ss << val;
             return true;
@@ -877,6 +899,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 8 > size) return false;
             uint64_t val = 0;
             std::memcpy(&val, buffer + offset, 8);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 8;
             ss << val;
             return true;
@@ -886,6 +909,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 8 > size) return false;
             int64_t val = 0;
             std::memcpy(&val, buffer + offset, 8);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 8;
             ss << val;
             return true;
@@ -895,6 +919,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 4 > size) return false;
             float val = 0;
             std::memcpy(&val, buffer + offset, 4);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 4;
             ss << val;
             return true;
@@ -904,6 +929,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 8 > size) return false;
             double val = 0;
             std::memcpy(&val, buffer + offset, 8);
+            if (swap_bytes) val = cdr_byte_swap(val);
             offset += 8;
             ss << val;
             return true;
@@ -913,6 +939,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset + 4 > size) return false;
             uint32_t len = 0;
             std::memcpy(&len, buffer + offset, 4);
+            if (swap_bytes) len = cdr_byte_swap(len);
             offset += 4;
             if (len > 0 && offset + len <= size) {
                 std::string str_val(reinterpret_cast<const char*>(buffer + offset), (buffer[offset + len - 1] == '\0') ? len - 1 : len);
@@ -928,7 +955,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
         case ROS_TYPE_MESSAGE: {
             if (member.members_ && member.members_->data) {
                 const auto* sub_members = static_cast<const ::rosidl_typesupport_introspection_cpp::MessageMembers*>(member.members_->data);
-                return parse_cdr_members(sub_members, buffer, size, offset, ss, indent_level);
+                return parse_cdr_members(sub_members, buffer, size, offset, ss, indent_level, swap_bytes);
             }
             return false;
         }
@@ -954,11 +981,16 @@ static std::string format_serialized_message(const std::string& type_str, const 
         return ss.str();
     }
 
+    // CDR encapsulation header byte 0: 0x01 = little-endian, 0x00 = big-endian
+    // (bytes 1-3 are options/reserved). Swap when the stream order differs
+    // from the host.
+    const bool swap_bytes = (buffer[0] == 0x01) != g_host_is_little_endian;
+
     const auto* members = get_message_members(type_str);
     if (members) {
         size_t offset = 4; // Skip 4-byte CDR header
         std::stringstream json_ss;
-        if (parse_cdr_members(members, buffer, size, offset, json_ss, 0)) {
+        if (parse_cdr_members(members, buffer, size, offset, json_ss, 0, swap_bytes)) {
             ss << json_ss.str();
             return ss.str();
         }
@@ -973,6 +1005,7 @@ static std::string format_serialized_message(const std::string& type_str, const 
         if (offset + 4 <= size) {
             uint32_t len = 0;
             std::memcpy(&len, buffer + offset, 4);
+            if (swap_bytes) len = cdr_byte_swap(len);
             if (len > 0 && len < 2048 && offset + 4 + len <= size) {
                 bool valid_ascii = true;
                 for (size_t i = 0; i < len - 1; ++i) {

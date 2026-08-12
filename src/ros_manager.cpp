@@ -371,12 +371,15 @@ static const ::rosidl_typesupport_introspection_cpp::MessageMembers* get_message
         return it->second.members;
     }
 
-    std::string pkg, msg_name;
+    std::string pkg, kind = "msg", msg_name;
     size_t slash1 = type_str.find('/');
     if (slash1 != std::string::npos) {
         pkg = type_str.substr(0, slash1);
         size_t slash2 = type_str.find('/', slash1 + 1);
         if (slash2 != std::string::npos) {
+            // Middle segment is "msg", "srv" or "action" (action-generated
+            // messages like pkg/action/Name_Goal export with `action`).
+            kind = type_str.substr(slash1 + 1, slash2 - slash1 - 1);
             msg_name = type_str.substr(slash2 + 1);
         } else {
             msg_name = type_str.substr(slash1 + 1);
@@ -395,11 +398,11 @@ static const ::rosidl_typesupport_introspection_cpp::MessageMembers* get_message
         return nullptr;
     }
 
-    std::string sym_name = "rosidl_typesupport_introspection_cpp__get_message_type_support_handle__" + pkg + "__msg__" + msg_name;
+    std::string sym_name = "rosidl_typesupport_introspection_cpp__get_message_type_support_handle__" + pkg + "__" + kind + "__" + msg_name;
     using GetTSFn = const rosidl_message_type_support_t* (*)();
     GetTSFn get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
     if (!get_ts_fn) {
-        sym_name = "rosidl_typesupport_c__get_message_type_support_handle__" + pkg + "__msg__" + msg_name;
+        sym_name = "rosidl_typesupport_c__get_message_type_support_handle__" + pkg + "__" + kind + "__" + msg_name;
         get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
     }
 

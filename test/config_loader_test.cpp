@@ -1,5 +1,7 @@
 #include "lazyrtui/config_loader.hpp"
 #include <gtest/gtest.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -8,24 +10,55 @@ namespace lazyrtui {
 
 namespace {
 
-// Unique temp-dir fixture so tests don't litter the tree and stay hermetic.
+// Hermetic temp-dir fixture: every test gets a pid-unique scratch dir, a HOME
+// pointed at an empty dir (so the real ~/.config/lazyrtui can never leak in),
+// and a CWD inside the scratch dir (so ./config/default_config.yaml only
+// resolves when a test deliberately creates it).
 class ConfigLoaderTest : public ::testing::Test {
 protected:
   void SetUp() override {
-    dir_ = std::filesystem::temp_directory_path() / "lazyrtui_cfg_test";
+    dir_ = std::filesystem::temp_directory_path() /
+           ("lazyrtui_cfg_test_" + std::to_string(::getpid()));
     std::filesystem::remove_all(dir_);
     std::filesystem::create_directories(dir_);
+    home_dir_ = dir_ / "home";
+    std::filesystem::create_directories(home_dir_);
+
+    if (const char *old = std::getenv("HOME")) {
+      old_home_ = old;
+    }
+    ASSERT_EQ(::setenv("HOME", home_dir_.c_str(), 1), 0);
+
+    old_cwd_ = std::filesystem::current_path();
+    std::filesystem::current_path(dir_);
   }
-  void TearDown() override { std::filesystem::remove_all(dir_); }
+  void TearDown() override {
+    std::filesystem::current_path(old_cwd_);
+    if (old_home_.empty()) {
+      ::unsetenv("HOME");
+    } else {
+      ::setenv("HOME", old_home_.c_str(), 1);
+    }
+    std::filesystem::remove_all(dir_);
+  }
+
+  void WriteFile(const std::filesystem::path &path,
+                 const std::string &content) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream out(path);
+    out << content;
+  }
 
   std::string WriteConfig(const std::string &content) {
     const std::filesystem::path file = dir_ / "config.yaml";
-    std::ofstream out(file);
-    out << content;
+    WriteFile(file, content);
     return file.string();
   }
 
   std::filesystem::path dir_;
+  std::filesystem::path home_dir_;
+  std::string old_home_;
+  std::filesystem::path old_cwd_;
 };
 
 }  // namespace
@@ -126,6 +159,9 @@ TEST_F(ConfigLoaderTest, EmptyConfigKeepsDefaults) {
 }
 
 TEST_F(ConfigLoaderTest, MissingFileFallsBackToDefaults) {
+  // HOME is an empty dir and CWD is the scratch dir with no config/ subdir,
+  // so every fallback link misses deterministically: this pins the pure
+  // defaults path regardless of the host's real ~/.config/lazyrtui.
   const std::string path = (dir_ / "does_not_exist.yaml").string();
   ConfigLoader loader(path);
   Config cfg = loader.load();  // Must not throw; prints a note to stderr.
@@ -137,10 +173,24 @@ TEST_F(ConfigLoaderTest, MissingFileFallsBackToDefaults) {
 TEST_F(ConfigLoaderTest, MalformedYamlFallsBackToDefaults) {
   const std::string path = WriteConfig("keybindings: [unclosed\n  bad: yaml::");
   ConfigLoader loader(path);
-  Config cfg = loader.load();  // YAML::Exception caught -> defaults.
+  Config cfg = loader.load();  // YAML::LoadFile exception caught -> defaults.
   EXPECT_EQ(cfg.keybindings.quit, "q");
   EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);
   EXPECT_TRUE(cfg.topics.empty());
+}
+
+TEST_F(ConfigLoaderTest, ConversionErrorLeavesPartialConfig) {
+  // A field with an unconvertible value throws YAML::BadConversion mid-parse;
+  // fields parsed before it are kept, later ones keep their defaults.
+  const std::string path = WriteConfig(
+      "keybindings:\n"
+      "  quit: 'x'\n"
+      "ui:\n"
+      "  auto_refresh_interval_ms: not_a_number\n");
+  ConfigLoader loader(path);
+  Config cfg = loader.load();
+  EXPECT_EQ(cfg.keybindings.quit, "x");  // Parsed before the bad node.
+  EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);  // Default after the throw.
 }
 
 TEST_F(ConfigLoaderTest, UnknownKeysAreIgnored) {
@@ -158,24 +208,32 @@ TEST_F(ConfigLoaderTest, UnknownKeysAreIgnored) {
 }
 
 TEST_F(ConfigLoaderTest, HomeFallbackIsUsedWhenNoExplicitPath) {
-  // Point HOME at a temp dir containing ~/.config/lazyrtui/config.yaml; the
-  // empty constructor path must resolve through $HOME.
-  const std::filesystem::path home = dir_ / "home";
-  std::filesystem::create_directories(home / ".config" / "lazyrtui");
-  {
-    std::ofstream out(home / ".config" / "lazyrtui" / "config.yaml");
-    out << "keybindings:\n  quit: 'Q'\n";
-  }
-  const char *old_home = std::getenv("HOME");
-  ASSERT_EQ(::setenv("HOME", home.c_str(), 1), 0);
+  // Fixture HOME points at home_dir_; writing the standard location there
+  // must be picked up by the empty-path resolution.
+  WriteFile(home_dir_ / ".config" / "lazyrtui" / "config.yaml",
+            "keybindings:\n  quit: 'Q'\n");
   ConfigLoader loader("");  // No explicit path -> $HOME fallback.
   Config cfg = loader.load();
   EXPECT_EQ(cfg.keybindings.quit, "Q");
-  if (old_home) {
-    ::setenv("HOME", old_home, 1);
-  } else {
-    ::unsetenv("HOME");
-  }
+}
+
+TEST_F(ConfigLoaderTest, ExplicitPathWinsOverHome) {
+  WriteFile(home_dir_ / ".config" / "lazyrtui" / "config.yaml",
+            "keybindings:\n  quit: 'H'\n");
+  const std::string path = WriteConfig("keybindings:\n  quit: 'E'\n");
+  ConfigLoader loader(path);
+  Config cfg = loader.load();
+  EXPECT_EQ(cfg.keybindings.quit, "E");  // Explicit path has precedence.
+}
+
+TEST_F(ConfigLoaderTest, DefaultConfigFallbackIsUsedLast) {
+  // No explicit path, empty HOME, but a ./config/default_config.yaml relative
+  // to the fixture CWD -> that fallback link is exercised deterministically.
+  WriteFile(dir_ / "config" / "default_config.yaml",
+            "keybindings:\n  quit: 'D'\n");
+  ConfigLoader loader("");
+  Config cfg = loader.load();
+  EXPECT_EQ(cfg.keybindings.quit, "D");
 }
 
 }  // namespace lazyrtui

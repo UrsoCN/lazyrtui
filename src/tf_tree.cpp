@@ -29,8 +29,13 @@ void TFTree::update_transform(const std::string &parent,
 
   auto &child_node = child_it->second;
   // Re-parenting: remove the child from its previous parent's children map so
-  // stale branch pointers don't survive a parent change.
-  if (!child_node->parent_id.empty() && child_node->parent_id != parent) {
+  // stale branch pointers don't survive a parent change. The previous parent
+  // frame may not exist yet (a frame created as a parent defaults to an empty
+  // parent_id) — the lookup guards that case. This also cleans re-parenting
+  // away from the literal "" root frame (parent_id ""), which the old
+  // !parent_id.empty() guard skipped, leaving a duplicated subtree in
+  // snapshots.
+  if (child_node->parent_id != parent) {
     auto old_parent_it = frames_.find(child_node->parent_id);
     if (old_parent_it != frames_.end()) {
       old_parent_it->second->children.erase(child);
@@ -74,8 +79,10 @@ TFTree::find_frame(const std::string &frame_id) const {
 TFSnapshot TFTree::snapshot() const {
   std::lock_guard<std::mutex> lock(mutex_);
   TFSnapshot out;
-  std::set<std::string> visited;  // Cycle guard: update_transform permits loops.
-  std::function<void(const std::shared_ptr<TFTreeNode> &, TFSnapshotNode &, int)>
+  // Cycle guard: update_transform permits loops.
+  std::set<std::string> visited;
+  std::function<void(const std::shared_ptr<TFTreeNode> &, TFSnapshotNode &,
+                     int)>
       copy_node;
   copy_node = [&](const std::shared_ptr<TFTreeNode> &src, TFSnapshotNode &dst,
                   int depth) {

@@ -4,6 +4,21 @@
 
 namespace lazyrtui {
 
+namespace {
+// snapshot() copies every root-eligible frame, but a frame that is BOTH a root
+// (parent_id == "") AND reachable from another root's subtree is emitted as an
+// empty stub (shared visited set). The literal "" root normally carries the
+// real data — return it, or nullptr if absent.
+const TFSnapshotNode *FindRealEmptyRoot(const TFSnapshot &snap) {
+  for (const auto &r : snap.roots) {
+    if (r.frame_id == "" && !r.children.empty()) {
+      return &r;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
 TEST(TFTreeTest, CreateFramesAndRoots) {
   TFTree tree;
   tree.update_transform("", "base_link", 1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0);
@@ -106,23 +121,23 @@ TEST(TFTreeTest, FindFrameReturnsKnownOrNull) {
 
 TEST(TFTreeTest, SnapshotDeepCopiesWithTimestamps) {
   TFTree tree;
-  tree.update_transform("", "base_link", 1, 2, 3, 0, 0, 0, 1, 100.0);
+  tree.update_transform("", "base_link", 1, 2, 3, 0.1, 0.2, 0.3, 0.9, 100.0);
   tree.update_transform("base_link", "laser", 0, 0, 0.5, 0, 0, 0, 1, 200.0);
   auto snap = tree.snapshot();
   // Same root semantics as get_roots(): the literal "" frame and base_link.
   ASSERT_EQ(snap.roots.size(), 2u);
-  const TFSnapshotNode *root_node = nullptr;
-  for (const auto &r : snap.roots) {
-    if (r.frame_id == "") {
-      root_node = &r;
-      break;
-    }
-  }
+  const TFSnapshotNode *root_node = FindRealEmptyRoot(snap);
   ASSERT_NE(root_node, nullptr);
   ASSERT_EQ(root_node->children.size(), 1u);
   const auto &child = root_node->children[0];
   EXPECT_EQ(child.frame_id, "base_link");
   EXPECT_EQ(child.tx, 1.0);
+  EXPECT_EQ(child.ty, 2.0);
+  EXPECT_EQ(child.tz, 3.0);
+  EXPECT_EQ(child.rx, 0.1);
+  EXPECT_EQ(child.ry, 0.2);
+  EXPECT_EQ(child.rz, 0.3);
+  EXPECT_EQ(child.rw, 0.9);
   EXPECT_EQ(child.last_update, 100.0);
   ASSERT_EQ(child.children.size(), 1u);
   EXPECT_EQ(child.children[0].frame_id, "laser");
@@ -139,26 +154,14 @@ TEST(TFTreeTest, SnapshotIsDeepCopyIndependentOfLiveTree) {
   // empty stub because the shared visited set already traversed it under "".
   // Navigate the "" root's subtree, which carries the real data.
   ASSERT_EQ(snap.roots.size(), 2u);
-  const TFSnapshotNode *root_node = nullptr;
-  for (const auto &r : snap.roots) {
-    if (r.frame_id == "" && !r.children.empty()) {
-      root_node = &r;
-      break;
-    }
-  }
+  const TFSnapshotNode *root_node = FindRealEmptyRoot(snap);
   ASSERT_NE(root_node, nullptr);
   ASSERT_EQ(root_node->children.size(), 1u);
   EXPECT_EQ(root_node->children[0].frame_id, "a");
   EXPECT_TRUE(root_node->children[0].children.empty());  // No "b" in old snap.
   // The live tree now exposes the new branch under the "" root's child "a".
   auto snap2 = tree.snapshot();
-  const TFSnapshotNode *root2 = nullptr;
-  for (const auto &r : snap2.roots) {
-    if (r.frame_id == "" && !r.children.empty()) {
-      root2 = &r;
-      break;
-    }
-  }
+  const TFSnapshotNode *root2 = FindRealEmptyRoot(snap2);
   ASSERT_NE(root2, nullptr);
   ASSERT_EQ(root2->children.size(), 1u);
   EXPECT_EQ(root2->children[0].frame_id, "a");
@@ -177,13 +180,7 @@ TEST(TFTreeTest, SnapshotTruncatesAtDepthCap) {
   // "" is a root carrying the full chain; "n0" (parent_id == "") is a root
   // that reduces to an empty stub under the shared visited set. Walk the ""
   // root's chain.
-  const TFSnapshotNode *root_node = nullptr;
-  for (const auto &r : snap.roots) {
-    if (r.frame_id == "" && !r.children.empty()) {
-      root_node = &r;
-      break;
-    }
-  }
+  const TFSnapshotNode *root_node = FindRealEmptyRoot(snap);
   ASSERT_NE(root_node, nullptr);
   int depth = 0;
   const TFSnapshotNode *cur = root_node;
@@ -228,17 +225,19 @@ TEST(TFTreeTest, BackEdgeCycleTerminates) {
   TFTree tree;
   tree.update_transform("", "a", 0, 0, 0, 0, 0, 0, 1);
   tree.update_transform("a", "b", 0, 0, 0, 0, 0, 0, 1);
-  tree.update_transform("b", "a", 0, 0, 0, 0, 0, 0, 1);  // a back-edge -> cycle
+  // Re-parenting "a" away from the "" root must clean the stale "" -> a link
+  // (Issue #7), so the a<->b cycle becomes unreachable from any root.
+  tree.update_transform("b", "a", 0, 0, 0, 0, 0, 0, 1);
+  auto roots = tree.get_roots();
+  ASSERT_EQ(roots.size(), 1u);  // Only "" remains a root.
+  EXPECT_EQ(roots[""]->children.count("a"), 0u);  // Stale link cleaned.
+  // The a<->b cycle still exists in the live tree (parent_id preserved)...
+  EXPECT_EQ(tree.find_frame("a")->parent_id, "b");
+  EXPECT_EQ(tree.find_frame("b")->parent_id, "a");
+  // ...but is unreachable from roots, so snapshot terminates with an empty "".
   auto snap = tree.snapshot();
-  ASSERT_EQ(snap.roots.size(), 1u);  // "" is the only root (a/b have parents).
-  ASSERT_EQ(snap.roots[0].children.size(), 1u);
-  EXPECT_EQ(snap.roots[0].children[0].frame_id, "a");
-  ASSERT_EQ(snap.roots[0].children[0].children.size(), 1u);
-  EXPECT_EQ(snap.roots[0].children[0].children[0].frame_id, "b");
-  // Re-entering "a" from "b" is blocked by the visited set: only an empty stub.
-  ASSERT_EQ(snap.roots[0].children[0].children[0].children.size(), 1u);
-  EXPECT_TRUE(
-      snap.roots[0].children[0].children[0].children[0].frame_id.empty());
+  ASSERT_EQ(snap.roots.size(), 1u);
+  EXPECT_TRUE(snap.roots[0].children.empty());
 }
 
 TEST(TFTreeTest, ClearRemovesAll) {

@@ -17,3 +17,6 @@ compile_commands.json
 .cache/
 
 config/plugins
+
+# Deepwork session state (git-local, not shared)
+.slim/deepwork/

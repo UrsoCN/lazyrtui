@@ -120,6 +120,21 @@ lazyrtui/
 
 ---
 
+## Code Style
+
+VS Code's "Format Document" (clangd) is powered by the clang-format engine. It looks for a `.clang-format` file in the file's directory (walking up the tree); if none is found, it falls back to clangd's `--fallback-style` default, which is the **LLVM style**.
+
+This repository currently has **no `.clang-format` file**, so all C++ code is formatted with the **LLVM style** (`clang-format -style=LLVM`):
+
+- 2-space indentation, no tabs
+- 80-column line limit
+- Braces attached to control statements and functions
+- Pointers/references aligned right (`int* p`)
+
+Adding a `.clang-format` file at the repo root later will override this default.
+
+---
+
 ## License
 
 MIT License.

@@ -76,3 +76,10 @@ To run the built binary:
 - All project code should reside inside the `lazyrtui` namespace (`namespace lazyrtui { ... }`).
 - Keep UI rendering responsive and non-blocking. Thread-synchronize data shared between the ROS 2 executor thread and the FTXUI main event loop using `std::mutex`.
 - Use clickable `file://` links when pointing users to files in responses.
+
+### Code Formatting (clangd / clang-format)
+- VS Code's "Format Document" via the clangd extension is driven by the **clang-format** engine (clangd embeds the clang-format library).
+- Style resolution: clangd looks for a `.clang-format` (or `_clang-format`) file starting from the file's directory and walking up the tree. If none is found, it uses the value of clangd's `--fallback-style` option, whose default is **LLVM**.
+- This repository currently has **no `.clang-format` file**, so formatting defaults to the **LLVM style** (`clang-format -style=LLVM`).
+- LLVM style key parameters: 2-space indentation, 80-column limit, no tabs, braces attached (`BreakBeforeBraces: Attach`), pointer/reference alignment on the right (`int* p`), short functions inline only.
+- If a `.clang-format` file is added later, clangd will pick it up automatically and it takes precedence over the fallback.

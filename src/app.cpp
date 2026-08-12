@@ -1,13 +1,13 @@
 #include "lazyrtui/app.hpp"
-#include "lazyrtui/ros_manager.hpp"
 #include "lazyrtui/config_loader.hpp"
-#include "lazyrtui/tf_tree.hpp"
-#include "lazyrtui/python_plugin_engine.hpp"
 #include "lazyrtui/ftxui_converter.hpp"
+#include "lazyrtui/python_plugin_engine.hpp"
+#include "lazyrtui/ros_manager.hpp"
+#include "lazyrtui/tf_tree.hpp"
 
 #include <ftxui/component/component.hpp>
-#include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/component/event.hpp>
+#include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/dom/table.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -26,678 +26,694 @@ using namespace ftxui;
 
 namespace lazyrtui {
 
-LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config& config)
+LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr,
+                         const Config &config)
     : ros_mgr_(std::move(ros_mgr)), config_(config) {
-    tab_names_ = {
-        "1:Nodes", "2:Topics", "3:Services", "4:Actions",
-        "5:Interfaces", "6:Bags", "7:TF", "8:About"
-    };
+  tab_names_ = {"1:Nodes",      "2:Topics", "3:Services", "4:Actions",
+                "5:Interfaces", "6:Bags",   "7:TF",       "8:About"};
 
-    // Initial data to populate menus
-    nodes_list_ = {"/turtlesim", "/teleop_turtle"};
-    topics_list_ = {"/turtle1/cmd_vel [geometry_msgs/msg/Twist]", "/turtle1/pose [turtlesim/msg/Pose]"};
-    topics_menu_labels_ = {"[ ] /turtle1/cmd_vel [geometry_msgs/msg/Twist]", "[ ] /turtle1/pose [turtlesim/msg/Pose]"};
-    services_list_ = {"/clear [std_srvs/srv/Empty]", "/spawn [turtlesim/srv/Spawn]"};
-    actions_list_ = {"/turtle1/rotate_absolute [turtlesim/action/RotateAbsolute]"};
+  // Initial data to populate menus
+  nodes_list_ = {"/turtlesim", "/teleop_turtle"};
+  topics_list_ = {"/turtle1/cmd_vel [geometry_msgs/msg/Twist]",
+                  "/turtle1/pose [turtlesim/msg/Pose]"};
+  topics_menu_labels_ = {"[ ] /turtle1/cmd_vel [geometry_msgs/msg/Twist]",
+                         "[ ] /turtle1/pose [turtlesim/msg/Pose]"};
+  services_list_ = {"/clear [std_srvs/srv/Empty]",
+                    "/spawn [turtlesim/srv/Spawn]"};
+  actions_list_ = {
+      "/turtle1/rotate_absolute [turtlesim/action/RotateAbsolute]"};
 
-    // Initialize Python Topic Plugin Engine
-    python_plugin_engine_ = std::make_unique<PythonPluginEngine>();
-    const char* home = std::getenv("HOME");
-    if (home) {
-        python_plugin_engine_->load_plugins_from_dir(std::string(home) + "/.config/lazyrtui/plugins");
+  // Initialize Python Topic Plugin Engine
+  python_plugin_engine_ = std::make_unique<PythonPluginEngine>();
+  const char *home = std::getenv("HOME");
+  if (home) {
+    python_plugin_engine_->load_plugins_from_dir(std::string(home) +
+                                                 "/.config/lazyrtui/plugins");
+  }
+  python_plugin_engine_->load_plugins_from_dir("./config/plugins");
+  python_plugin_engine_->load_plugins_from_dir("./plugins");
+
+  const char *plugin_path = std::getenv("LAZYRTUI_PLUGIN_PATH");
+  if (plugin_path) {
+    std::string path_str(plugin_path);
+    size_t pos = 0;
+    while ((pos = path_str.find(':')) != std::string::npos) {
+      std::string dir = path_str.substr(0, pos);
+      if (!dir.empty())
+        python_plugin_engine_->load_plugins_from_dir(dir);
+      path_str.erase(0, pos + 1);
     }
-    python_plugin_engine_->load_plugins_from_dir("./config/plugins");
-    python_plugin_engine_->load_plugins_from_dir("./plugins");
+    if (!path_str.empty())
+      python_plugin_engine_->load_plugins_from_dir(path_str);
+  }
 
-    const char* plugin_path = std::getenv("LAZYRTUI_PLUGIN_PATH");
-    if (plugin_path) {
-        std::string path_str(plugin_path);
-        size_t pos = 0;
-        while ((pos = path_str.find(':')) != std::string::npos) {
-            std::string dir = path_str.substr(0, pos);
-            if (!dir.empty()) python_plugin_engine_->load_plugins_from_dir(dir);
-            path_str.erase(0, pos + 1);
-        }
-        if (!path_str.empty()) python_plugin_engine_->load_plugins_from_dir(path_str);
+  if (!python_plugin_engine_->loaded_plugins().empty()) {
+    std::cerr << "[lazyrtui] Loaded "
+              << python_plugin_engine_->loaded_plugins().size()
+              << " Python topic plugin(s):\n";
+    for (const auto &p : python_plugin_engine_->loaded_plugins()) {
+      std::cerr << "  - " << p.name << " (" << p.file_path << ")\n";
     }
-
-    if (!python_plugin_engine_->loaded_plugins().empty()) {
-        std::cerr << "[lazyrtui] Loaded " << python_plugin_engine_->loaded_plugins().size() << " Python topic plugin(s):\n";
-        for (const auto& p : python_plugin_engine_->loaded_plugins()) {
-            std::cerr << "  - " << p.name << " (" << p.file_path << ")\n";
-        }
-    }
+  }
 }
 
 LazyRTUIApp::~LazyRTUIApp() {
-    stop_refresh_timer();
-    if (ros_mgr_) {
-        for (const auto& topic : subscribed_topics_) {
-            ros_mgr_->unsubscribe_topic(topic);
-        }
+  stop_refresh_timer();
+  if (ros_mgr_) {
+    for (const auto &topic : subscribed_topics_) {
+      ros_mgr_->unsubscribe_topic(topic);
     }
+  }
 }
 
 void LazyRTUIApp::toggle_topic_subscription(int index) {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (index < 0 || index >= (int)topics_list_.size()) return;
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  if (index < 0 || index >= (int)topics_list_.size())
+    return;
 
-    std::string full_str = topics_list_[index];
-    size_t pos = full_str.find(" [");
-    if (pos == std::string::npos) return;
+  std::string full_str = topics_list_[index];
+  size_t pos = full_str.find(" [");
+  if (pos == std::string::npos)
+    return;
 
-    std::string topic_name = full_str.substr(0, pos);
-    std::string type_str = full_str.substr(pos + 2);
-    if (!type_str.empty() && type_str.back() == ']') type_str.pop_back();
+  std::string topic_name = full_str.substr(0, pos);
+  std::string type_str = full_str.substr(pos + 2);
+  if (!type_str.empty() && type_str.back() == ']')
+    type_str.pop_back();
 
-    if (subscribed_topics_.find(topic_name) != subscribed_topics_.end()) {
-        // Unsubscribe
-        subscribed_topics_.erase(topic_name);
-        topic_messages_map_.erase(topic_name);
-        if (ros_mgr_) {
-            ros_mgr_->unsubscribe_topic(topic_name);
-        }
-    } else {
-        // Subscribe
-        subscribed_topics_.insert(topic_name);
-        if (ros_mgr_) {
-            ros_mgr_->subscribe_topic(topic_name, type_str, [this](const std::string& topic, const std::string& msg) {
-                std::lock_guard<std::mutex> lock(data_mutex_);
-                auto& msgs = topic_messages_map_[topic];
-                if (msgs.size() >= 20) {
-                    msgs.erase(msgs.begin());
-                }
-                msgs.push_back(msg);
-                if (screen_) {
-                    screen_->PostEvent(Event::Custom);
-                }
-            });
-        }
+  if (subscribed_topics_.find(topic_name) != subscribed_topics_.end()) {
+    // Unsubscribe
+    subscribed_topics_.erase(topic_name);
+    topic_messages_map_.erase(topic_name);
+    if (ros_mgr_) {
+      ros_mgr_->unsubscribe_topic(topic_name);
     }
-
-    // Refresh menu labels
-    topics_menu_labels_.clear();
-    for (const auto& t_str : topics_list_) {
-        size_t p = t_str.find(" [");
-        std::string t_name = (p != std::string::npos) ? t_str.substr(0, p) : t_str;
-        bool is_sub = (subscribed_topics_.find(t_name) != subscribed_topics_.end());
-        topics_menu_labels_.push_back(std::string(is_sub ? "[x] " : "[ ] ") + t_str);
+  } else {
+    // Subscribe
+    subscribed_topics_.insert(topic_name);
+    if (ros_mgr_) {
+      ros_mgr_->subscribe_topic(
+          topic_name, type_str,
+          [this](const std::string &topic, const std::string &msg) {
+            std::lock_guard<std::mutex> lock(data_mutex_);
+            auto &msgs = topic_messages_map_[topic];
+            if (msgs.size() >= 20) {
+              msgs.erase(msgs.begin());
+            }
+            msgs.push_back(msg);
+            if (screen_) {
+              screen_->PostEvent(Event::Custom);
+            }
+          });
     }
+  }
+
+  // Refresh menu labels
+  topics_menu_labels_.clear();
+  for (const auto &t_str : topics_list_) {
+    size_t p = t_str.find(" [");
+    std::string t_name = (p != std::string::npos) ? t_str.substr(0, p) : t_str;
+    bool is_sub = (subscribed_topics_.find(t_name) != subscribed_topics_.end());
+    topics_menu_labels_.push_back(std::string(is_sub ? "[x] " : "[ ] ") +
+                                  t_str);
+  }
 }
 
 void LazyRTUIApp::start_refresh_timer() {
-    if (config_.ui.auto_refresh_interval_ms <= 0) return;
-    refresh_running_ = true;
-    refresh_thread_ = std::make_unique<std::thread>([this]() {
-        while (refresh_running_) {
-            std::this_thread::sleep_for(std::chrono::seconds(2));
-            refresh_data();
-            if (screen_) {
-                screen_->PostEvent(Event::Custom);
-            }
-        }
-    });
+  if (config_.ui.auto_refresh_interval_ms <= 0)
+    return;
+  refresh_running_ = true;
+  refresh_thread_ = std::make_unique<std::thread>([this]() {
+    while (refresh_running_) {
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+      refresh_data();
+      if (screen_) {
+        screen_->PostEvent(Event::Custom);
+      }
+    }
+  });
 }
 
 void LazyRTUIApp::stop_refresh_timer() {
-    refresh_running_ = false;
-    if (refresh_thread_ && refresh_thread_->joinable()) {
-        refresh_thread_->join();
-    }
+  refresh_running_ = false;
+  if (refresh_thread_ && refresh_thread_->joinable()) {
+    refresh_thread_->join();
+  }
 }
 
 void LazyRTUIApp::refresh_data() {
-    std::lock_guard<std::mutex> lock(data_mutex_);
-    if (!ros_mgr_ || !ros_mgr_->is_connected()) return;
+  std::lock_guard<std::mutex> lock(data_mutex_);
+  if (!ros_mgr_ || !ros_mgr_->is_connected())
+    return;
 
-    try {
-        auto nodes = ros_mgr_->get_nodes();
-        std::vector<std::string> new_nodes;
-        for (const auto& n : nodes) {
-            new_nodes.push_back((n.ns == "/" ? "" : n.ns) + "/" + n.name);
-        }
-        if (new_nodes != nodes_list_) nodes_list_ = std::move(new_nodes);
-
-        auto topics = ros_mgr_->get_topics();
-        std::vector<std::string> new_topics;
-        std::vector<std::string> new_menu_labels;
-        for (const auto& t : topics) {
-            std::string type_str = t.types.empty() ? "" : t.types.front();
-            std::string item_str = t.name + " [" + type_str + "]";
-            new_topics.push_back(item_str);
-            bool is_sub = (subscribed_topics_.find(t.name) != subscribed_topics_.end());
-            new_menu_labels.push_back(std::string(is_sub ? "[x] " : "[ ] ") + item_str);
-        }
-        if (new_topics != topics_list_) {
-            topics_list_ = std::move(new_topics);
-            topics_menu_labels_ = std::move(new_menu_labels);
-        }
-
-        auto services = ros_mgr_->get_services();
-        std::vector<std::string> new_services;
-        for (const auto& s : services) {
-            std::string type_str = s.types.empty() ? "" : s.types.front();
-            new_services.push_back(s.name + " [" + type_str + "]");
-        }
-        if (new_services != services_list_) services_list_ = std::move(new_services);
-
-        auto actions = ros_mgr_->get_actions();
-        std::vector<std::string> new_actions;
-        for (const auto& a : actions) {
-            std::string type_str = a.types.empty() ? "" : a.types.front();
-            new_actions.push_back(a.name + " [" + type_str + "]");
-        }
-        if (new_actions != actions_list_) actions_list_ = std::move(new_actions);
-    } catch (...) {
-        // Silently handle exceptions during refresh
+  try {
+    auto nodes = ros_mgr_->get_nodes();
+    std::vector<std::string> new_nodes;
+    for (const auto &n : nodes) {
+      new_nodes.push_back((n.ns == "/" ? "" : n.ns) + "/" + n.name);
     }
+    if (new_nodes != nodes_list_)
+      nodes_list_ = std::move(new_nodes);
+
+    auto topics = ros_mgr_->get_topics();
+    std::vector<std::string> new_topics;
+    std::vector<std::string> new_menu_labels;
+    for (const auto &t : topics) {
+      std::string type_str = t.types.empty() ? "" : t.types.front();
+      std::string item_str = t.name + " [" + type_str + "]";
+      new_topics.push_back(item_str);
+      bool is_sub =
+          (subscribed_topics_.find(t.name) != subscribed_topics_.end());
+      new_menu_labels.push_back(std::string(is_sub ? "[x] " : "[ ] ") +
+                                item_str);
+    }
+    if (new_topics != topics_list_) {
+      topics_list_ = std::move(new_topics);
+      topics_menu_labels_ = std::move(new_menu_labels);
+    }
+
+    auto services = ros_mgr_->get_services();
+    std::vector<std::string> new_services;
+    for (const auto &s : services) {
+      std::string type_str = s.types.empty() ? "" : s.types.front();
+      new_services.push_back(s.name + " [" + type_str + "]");
+    }
+    if (new_services != services_list_)
+      services_list_ = std::move(new_services);
+
+    auto actions = ros_mgr_->get_actions();
+    std::vector<std::string> new_actions;
+    for (const auto &a : actions) {
+      std::string type_str = a.types.empty() ? "" : a.types.front();
+      new_actions.push_back(a.name + " [" + type_str + "]");
+    }
+    if (new_actions != actions_list_)
+      actions_list_ = std::move(new_actions);
+  } catch (...) {
+    // Silently handle exceptions during refresh
+  }
 }
 
 Component LazyRTUIApp::make_nodes_tab() {
-    auto menu = Menu(&nodes_list_, &selected_node_);
-    
-    auto left_pane = Renderer(menu, [this, menu]() {
-        return window(text("Nodes"), menu->Render())
-               | (node_pane_focus_ == 0 ? borderLight : borderEmpty);
-    });
+  auto menu = Menu(&nodes_list_, &selected_node_);
 
-    auto right_pane = Renderer([this]() {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        std::string selected = (selected_node_ >= 0 && selected_node_ < (int)nodes_list_.size()) 
-                                ? nodes_list_[selected_node_] : "None";
-        
-        Elements items;
-        if (selected != "None" && ros_mgr_) {
-            std::string name = selected;
-            std::string ns = "/";
-            size_t last_slash = selected.find_last_of('/');
-            if (last_slash != std::string::npos && last_slash > 0) {
-                ns = selected.substr(0, last_slash);
-                name = selected.substr(last_slash + 1);
-            } else if (last_slash == 0) {
-                name = selected.substr(1);
-            }
-            auto detail = ros_mgr_->get_node_info(name, ns);
-            
-            items.push_back(text("Publishers:") | bold);
-            if (detail.publishers.empty()) {
-                items.push_back(text("  (None)") | dim);
-            } else {
-                for (const auto& [t, type] : detail.publishers) {
-                    items.push_back(text("  - " + t + " [" + type + "]"));
-                }
-            }
-            items.push_back(separator());
+  auto left_pane = Renderer(menu, [this, menu]() {
+    return window(text("Nodes"), menu->Render()) |
+           (node_pane_focus_ == 0 ? borderLight : borderEmpty);
+  });
 
-            items.push_back(text("Subscribers:") | bold);
-            if (detail.subscribers.empty()) {
-                items.push_back(text("  (None)") | dim);
-            } else {
-                for (const auto& [t, type] : detail.subscribers) {
-                    items.push_back(text("  - " + t + " [" + type + "]"));
-                }
-            }
-            items.push_back(separator());
+  auto right_pane = Renderer([this]() {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    std::string selected =
+        (selected_node_ >= 0 && selected_node_ < (int)nodes_list_.size())
+            ? nodes_list_[selected_node_]
+            : "None";
 
-            items.push_back(text("Services:") | bold);
-            if (detail.services.empty()) {
-                items.push_back(text("  (None)") | dim);
-            } else {
-                for (const auto& [s, type] : detail.services) {
-                    items.push_back(text("  - " + s + " [" + type + "]"));
-                }
-            }
-        } else {
-            items.push_back(text("No node selected"));
+    Elements items;
+    if (selected != "None" && ros_mgr_) {
+      std::string name = selected;
+      std::string ns = "/";
+      size_t last_slash = selected.find_last_of('/');
+      if (last_slash != std::string::npos && last_slash > 0) {
+        ns = selected.substr(0, last_slash);
+        name = selected.substr(last_slash + 1);
+      } else if (last_slash == 0) {
+        name = selected.substr(1);
+      }
+      auto detail = ros_mgr_->get_node_info(name, ns);
+
+      items.push_back(text("Publishers:") | bold);
+      if (detail.publishers.empty()) {
+        items.push_back(text("  (None)") | dim);
+      } else {
+        for (const auto &[t, type] : detail.publishers) {
+          items.push_back(text("  - " + t + " [" + type + "]"));
         }
+      }
+      items.push_back(separator());
 
-        return window(text("Node Details: " + selected), vbox(items)) 
-               | (node_pane_focus_ == 1 ? borderLight : borderEmpty);
-    });
+      items.push_back(text("Subscribers:") | bold);
+      if (detail.subscribers.empty()) {
+        items.push_back(text("  (None)") | dim);
+      } else {
+        for (const auto &[t, type] : detail.subscribers) {
+          items.push_back(text("  - " + t + " [" + type + "]"));
+        }
+      }
+      items.push_back(separator());
 
-    auto container = Container::Horizontal({left_pane, right_pane}, &node_pane_focus_);
-    
-    return Renderer(container, [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
-            right_pane->Render() | flex
-        });
-    });
+      items.push_back(text("Services:") | bold);
+      if (detail.services.empty()) {
+        items.push_back(text("  (None)") | dim);
+      } else {
+        for (const auto &[s, type] : detail.services) {
+          items.push_back(text("  - " + s + " [" + type + "]"));
+        }
+      }
+    } else {
+      items.push_back(text("No node selected"));
+    }
+
+    return window(text("Node Details: " + selected), vbox(items)) |
+           (node_pane_focus_ == 1 ? borderLight : borderEmpty);
+  });
+
+  auto container =
+      Container::Horizontal({left_pane, right_pane}, &node_pane_focus_);
+
+  return Renderer(container, [left_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
+                 right_pane->Render() | flex});
+  });
 }
 
 Component LazyRTUIApp::make_topics_tab() {
-    auto menu = Menu(&topics_menu_labels_, &selected_topic_);
-    
-    auto left_pane = Renderer(menu, [this, menu]() {
-        return window(text("Topics (Space/'e' to Toggle)"), menu->Render())
-               | (topic_pane_focus_ == 0 ? borderLight : borderEmpty);
-    });
+  auto menu = Menu(&topics_menu_labels_, &selected_topic_);
 
-    auto right_pane = Renderer([this]() {
-        std::lock_guard<std::mutex> lock(data_mutex_);
-        
-        if (subscribed_topics_.empty()) {
-            return window(text("Topic Echo"), vbox({
-                text("Status: No topics currently subscribed.") | color(Color::Yellow),
-                separator(),
-                text("Instructions:"),
-                text("  - Select topics in left list using j/k or Arrow keys."),
-                text("  - Press 'Space', 'e', or 'Enter' to toggle subscribe/unsubscribe."),
-                text("  - Multiple topics can be subscribed simultaneously!") | bold
-            })) | (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
+  auto left_pane = Renderer(menu, [this, menu]() {
+    return window(text("Topics (Space/'e' to Toggle)"), menu->Render()) |
+           (topic_pane_focus_ == 0 ? borderLight : borderEmpty);
+  });
+
+  auto right_pane = Renderer([this]() {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+
+    if (subscribed_topics_.empty()) {
+      return window(text("Topic Echo"),
+                    vbox({text("Status: No topics currently subscribed.") |
+                              color(Color::Yellow),
+                          separator(), text("Instructions:"),
+                          text("  - Select topics in left list using j/k or "
+                               "Arrow keys."),
+                          text("  - Press 'Space', 'e', or 'Enter' to toggle "
+                               "subscribe/unsubscribe."),
+                          text("  - Multiple topics can be subscribed "
+                               "simultaneously!") |
+                              bold})) |
+             (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
+    }
+
+    Elements topic_windows;
+    for (const auto &topic_name : subscribed_topics_) {
+      Elements msgs;
+      auto detail =
+          ros_mgr_ ? ros_mgr_->get_topic_info(topic_name) : TopicDetail{};
+
+      std::string py_module;
+      if (python_plugin_engine_) {
+        py_module = python_plugin_engine_->find_matching_plugin(topic_name,
+                                                                detail.type);
+      }
+
+      if (!py_module.empty()) {
+        // Rendered via Python Plugin
+        auto it = topic_messages_map_.find(topic_name);
+        if (it != topic_messages_map_.end() && !it->second.empty()) {
+          const std::string &raw = it->second.back();
+          std::string json_body;
+          if (raw.size() > 11 && raw[0] == '[' && raw[9] == ']') {
+            json_body = raw.substr(11);
+          } else {
+            json_body = raw;
+          }
+
+          nlohmann::json ui_spec = python_plugin_engine_->render_message(
+              py_module, topic_name, json_body);
+          auto plugin_els = FTXUIConverter::parse_ui_spec(ui_spec);
+          for (auto &el : plugin_els) {
+            msgs.push_back(std::move(el));
+          }
+        } else {
+          msgs.push_back(text("Waiting for messages...") | dim);
         }
 
-        Elements topic_windows;
-        for (const auto& topic_name : subscribed_topics_) {
-            Elements msgs;
-            auto detail = ros_mgr_ ? ros_mgr_->get_topic_info(topic_name) : TopicDetail{};
+        std::string win_title = " " + topic_name + " [" + py_module + ".py] ";
+        topic_windows.push_back(window(text(win_title), vbox(msgs)) | flex);
+      } else {
+        // Default raw topic renderer
+        msgs.push_back(
+            text("Type: " + (detail.type.empty() ? "Unknown" : detail.type)) |
+            dim);
+        msgs.push_back(
+            text("Publishers: " + std::to_string(detail.publisher_count) +
+                 " | Subscribers: " + std::to_string(detail.subscriber_count)) |
+            dim);
+        msgs.push_back(separator());
 
-            std::string py_module;
-            if (python_plugin_engine_) {
-                py_module = python_plugin_engine_->find_matching_plugin(topic_name, detail.type);
+        auto it = topic_messages_map_.find(topic_name);
+        if (it != topic_messages_map_.end() && !it->second.empty()) {
+          for (const auto &m : it->second) {
+            std::stringstream ss(m);
+            std::string line;
+            while (std::getline(ss, line)) {
+              msgs.push_back(text(line));
             }
-
-            if (!py_module.empty()) {
-                // Rendered via Python Plugin
-                auto it = topic_messages_map_.find(topic_name);
-                if (it != topic_messages_map_.end() && !it->second.empty()) {
-                    const std::string& raw = it->second.back();
-                    std::string json_body;
-                    if (raw.size() > 11 && raw[0] == '[' && raw[9] == ']') {
-                        json_body = raw.substr(11);
-                    } else {
-                        json_body = raw;
-                    }
-
-                    nlohmann::json ui_spec = python_plugin_engine_->render_message(py_module, topic_name, json_body);
-                    auto plugin_els = FTXUIConverter::parse_ui_spec(ui_spec);
-                    for (auto& el : plugin_els) {
-                        msgs.push_back(std::move(el));
-                    }
-                } else {
-                    msgs.push_back(text("Waiting for messages...") | dim);
-                }
-
-                std::string win_title = " " + topic_name + " [" + py_module + ".py] ";
-                topic_windows.push_back(window(text(win_title), vbox(msgs)) | flex);
-            } else {
-                // Default raw topic renderer
-                msgs.push_back(text("Type: " + (detail.type.empty() ? "Unknown" : detail.type)) | dim);
-                msgs.push_back(text("Publishers: " + std::to_string(detail.publisher_count) + 
-                                    " | Subscribers: " + std::to_string(detail.subscriber_count)) | dim);
-                msgs.push_back(separator());
-
-                auto it = topic_messages_map_.find(topic_name);
-                if (it != topic_messages_map_.end() && !it->second.empty()) {
-                    for (const auto& m : it->second) {
-                        std::stringstream ss(m);
-                        std::string line;
-                        while (std::getline(ss, line)) {
-                            msgs.push_back(text(line));
-                        }
-                    }
-                } else {
-                    msgs.push_back(text("Waiting for messages...") | dim);
-                }
-
-                topic_windows.push_back(window(text(" Echo: " + topic_name + " "), vbox(msgs)) | flex);
-            }
+          }
+        } else {
+          msgs.push_back(text("Waiting for messages...") | dim);
         }
 
-        return window(text("Live Topic Echoes (" + std::to_string(subscribed_topics_.size()) + " active)"), 
-                      vbox(topic_windows)) 
-               | (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
-    });
+        topic_windows.push_back(
+            window(text(" Echo: " + topic_name + " "), vbox(msgs)) | flex);
+      }
+    }
 
-    auto container = Container::Horizontal({left_pane, right_pane}, &topic_pane_focus_);
-    
-    return Renderer(container, [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
-            right_pane->Render() | flex
-        });
-    });
+    return window(text("Live Topic Echoes (" +
+                       std::to_string(subscribed_topics_.size()) + " active)"),
+                  vbox(topic_windows)) |
+           (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
+  });
+
+  auto container =
+      Container::Horizontal({left_pane, right_pane}, &topic_pane_focus_);
+
+  return Renderer(container, [left_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
+                 right_pane->Render() | flex});
+  });
 }
 
 Component LazyRTUIApp::make_services_tab() {
-    auto menu = Menu(&services_list_, &selected_service_);
-    
-    auto left_pane = Renderer(menu, [this, menu]() {
-        return window(text("Services"), menu->Render())
-               | (service_pane_focus_ == 0 ? borderLight : borderEmpty);
-    });
+  auto menu = Menu(&services_list_, &selected_service_);
 
-    auto input_json = Input(&service_request_json_, "{}");
-    auto call_btn = Button("Call Service", [this]() {
-        service_response_ = "{\n  \"success\": true\n}";
-    });
-    
-    auto right_container = Container::Vertical({input_json, call_btn});
+  auto left_pane = Renderer(menu, [this, menu]() {
+    return window(text("Services"), menu->Render()) |
+           (service_pane_focus_ == 0 ? borderLight : borderEmpty);
+  });
 
-    auto right_pane = Renderer(right_container, [this, input_json, call_btn]() {
-        std::string selected = (selected_service_ >= 0 && selected_service_ < (int)services_list_.size()) 
-                                ? services_list_[selected_service_] : "None";
-        
-        return window(text("Service Caller: " + selected), 
-            vbox({
-                text("Request JSON:"),
-                input_json->Render() | border,
-                call_btn->Render(),
-                separator(),
-                text("Response:"),
-                text(service_response_) | borderLight
-            })
-        ) | (service_pane_focus_ == 1 ? borderLight : borderEmpty);
-    });
+  auto input_json = Input(&service_request_json_, "{}");
+  auto call_btn = Button("Call Service", [this]() {
+    service_response_ = "{\n  \"success\": true\n}";
+  });
 
-    auto container = Container::Horizontal({left_pane, right_pane}, &service_pane_focus_);
-    
-    return Renderer(container, [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
-            right_pane->Render() | flex
-        });
-    });
+  auto right_container = Container::Vertical({input_json, call_btn});
+
+  auto right_pane = Renderer(right_container, [this, input_json, call_btn]() {
+    std::string selected = (selected_service_ >= 0 &&
+                            selected_service_ < (int)services_list_.size())
+                               ? services_list_[selected_service_]
+                               : "None";
+
+    return window(text("Service Caller: " + selected),
+                  vbox({text("Request JSON:"), input_json->Render() | border,
+                        call_btn->Render(), separator(), text("Response:"),
+                        text(service_response_) | borderLight})) |
+           (service_pane_focus_ == 1 ? borderLight : borderEmpty);
+  });
+
+  auto container =
+      Container::Horizontal({left_pane, right_pane}, &service_pane_focus_);
+
+  return Renderer(container, [left_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
+                 right_pane->Render() | flex});
+  });
 }
 
 Component LazyRTUIApp::make_actions_tab() {
-    auto menu = Menu(&actions_list_, &selected_action_);
-    
-    auto left_pane = Renderer(menu, [this, menu]() {
-        return window(text("Actions"), menu->Render())
-               | (action_pane_focus_ == 0 ? borderLight : borderEmpty);
-    });
+  auto menu = Menu(&actions_list_, &selected_action_);
 
-    auto input_json = Input(&action_goal_json_, "{}");
-    auto goal_btn = Button("Send Goal", [this]() {
-        action_response_ = "Status: ACCEPTED\nResult: {}";
-    });
-    
-    auto right_container = Container::Vertical({input_json, goal_btn});
+  auto left_pane = Renderer(menu, [this, menu]() {
+    return window(text("Actions"), menu->Render()) |
+           (action_pane_focus_ == 0 ? borderLight : borderEmpty);
+  });
 
-    auto right_pane = Renderer(right_container, [this, input_json, goal_btn]() {
-        std::string selected = (selected_action_ >= 0 && selected_action_ < (int)actions_list_.size()) 
-                                ? actions_list_[selected_action_] : "None";
-        
-        return window(text("Action Client: " + selected), 
-            vbox({
-                text("Goal JSON:"),
-                input_json->Render() | border,
-                goal_btn->Render(),
-                separator(),
-                text("Response/Status:"),
-                text(action_response_) | borderLight
-            })
-        ) | (action_pane_focus_ == 1 ? borderLight : borderEmpty);
-    });
+  auto input_json = Input(&action_goal_json_, "{}");
+  auto goal_btn = Button("Send Goal", [this]() {
+    action_response_ = "Status: ACCEPTED\nResult: {}";
+  });
 
-    auto container = Container::Horizontal({left_pane, right_pane}, &action_pane_focus_);
-    
-    return Renderer(container, [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
-            right_pane->Render() | flex
-        });
-    });
+  auto right_container = Container::Vertical({input_json, goal_btn});
+
+  auto right_pane = Renderer(right_container, [this, input_json, goal_btn]() {
+    std::string selected =
+        (selected_action_ >= 0 && selected_action_ < (int)actions_list_.size())
+            ? actions_list_[selected_action_]
+            : "None";
+
+    return window(
+               text("Action Client: " + selected),
+               vbox({text("Goal JSON:"), input_json->Render() | border,
+                     goal_btn->Render(), separator(), text("Response/Status:"),
+                     text(action_response_) | borderLight})) |
+           (action_pane_focus_ == 1 ? borderLight : borderEmpty);
+  });
+
+  auto container =
+      Container::Horizontal({left_pane, right_pane}, &action_pane_focus_);
+
+  return Renderer(container, [left_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
+                 right_pane->Render() | flex});
+  });
 }
 
 Component LazyRTUIApp::make_interfaces_tab() {
-    auto left_pane = Renderer([this]() {
-        return window(text("Packages"), 
-            vbox({
-                text("std_msgs"),
-                text("  msg/String"),
-                text("  msg/Int32")
-            })
-        ) | (interface_pane_focus_ == 0 ? borderLight : borderEmpty);
-    });
+  auto left_pane = Renderer([this]() {
+    return window(text("Packages"),
+                  vbox({text("std_msgs"), text("  msg/String"),
+                        text("  msg/Int32")})) |
+           (interface_pane_focus_ == 0 ? borderLight : borderEmpty);
+  });
 
-    auto right_pane = Renderer([this]() {
-        return window(text("Interface Definition"), 
-            vbox({
-                text("std_msgs/msg/String"),
-                separator(),
-                text("string data")
-            })
-        ) | (interface_pane_focus_ == 1 ? borderLight : borderEmpty);
-    });
+  auto right_pane = Renderer([this]() {
+    return window(text("Interface Definition"),
+                  vbox({text("std_msgs/msg/String"), separator(),
+                        text("string data")})) |
+           (interface_pane_focus_ == 1 ? borderLight : borderEmpty);
+  });
 
-    auto container = Container::Horizontal({left_pane, right_pane}, &interface_pane_focus_);
-    
-    return Renderer(container, [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
-            right_pane->Render() | flex
-        });
-    });
+  auto container =
+      Container::Horizontal({left_pane, right_pane}, &interface_pane_focus_);
+
+  return Renderer(container, [left_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
+                 right_pane->Render() | flex});
+  });
 }
 
 Component LazyRTUIApp::make_bags_tab() {
-    return Renderer([]() {
-        return window(text("Rosbag"), 
-            vbox({
-                text("Status: Idle"),
-                separator(),
-                text("Commands Reference:"),
-                text("  ros2 bag record -a"),
-                text("  ros2 bag play <file>")
-            })
-        ) | borderLight;
-    });
+  return Renderer([]() {
+    return window(text("Rosbag"), vbox({text("Status: Idle"), separator(),
+                                        text("Commands Reference:"),
+                                        text("  ros2 bag record -a"),
+                                        text("  ros2 bag play <file>")})) |
+           borderLight;
+  });
 }
 
 Component LazyRTUIApp::make_tf_tab() {
-    auto left_pane = Renderer([this]() {
-        return window(text("TF Tree"), 
-            vbox({
-                text("world"),
-                text("  └── base_link"),
-                text("      └── laser_link")
-            })
-        ) | (tf_pane_focus_ == 0 ? borderLight : borderEmpty);
-    });
+  auto left_pane = Renderer([this]() {
+    return window(text("TF Tree"), vbox({text("world"), text("  └── base_link"),
+                                         text("      └── laser_link")})) |
+           (tf_pane_focus_ == 0 ? borderLight : borderEmpty);
+  });
 
-    auto right_pane = Renderer([this]() {
-        return window(text("Transform Details"), 
-            vbox({
-                text("Translation:"),
-                text("  x: 0.0"),
-                text("  y: 0.0"),
-                text("  z: 0.0"),
-                separator(),
-                text("Rotation (Quaternion):"),
-                text("  x: 0.0"),
-                text("  y: 0.0"),
-                text("  z: 0.0"),
-                text("  w: 1.0")
-            })
-        ) | (tf_pane_focus_ == 1 ? borderLight : borderEmpty);
-    });
+  auto right_pane = Renderer([this]() {
+    return window(
+               text("Transform Details"),
+               vbox({text("Translation:"), text("  x: 0.0"), text("  y: 0.0"),
+                     text("  z: 0.0"), separator(),
+                     text("Rotation (Quaternion):"), text("  x: 0.0"),
+                     text("  y: 0.0"), text("  z: 0.0"), text("  w: 1.0")})) |
+           (tf_pane_focus_ == 1 ? borderLight : borderEmpty);
+  });
 
-    auto container = Container::Horizontal({left_pane, right_pane}, &tf_pane_focus_);
-    
-    return Renderer(container, [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
-            right_pane->Render() | flex
-        });
-    });
+  auto container =
+      Container::Horizontal({left_pane, right_pane}, &tf_pane_focus_);
+
+  return Renderer(container, [left_pane, right_pane]() {
+    return hbox({left_pane->Render() | size(WIDTH, GREATER_THAN, 30),
+                 right_pane->Render() | flex});
+  });
 }
 
 Component LazyRTUIApp::make_about_tab() {
-    auto left_pane = Renderer([]() {
-        return window(text("About"), 
-            vbox({
-                text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
-                text("ROS 2 Distro: Unknown"),
-                separator(),
-                text("Keybindings:"),
-                text("  1-8: Switch tabs"),
-                text("  w: Toggle focus"),
-                text("  r: Refresh"),
-                text("  e: Echo topic"),
-                text("  c: Call service"),
-                text("  g: Send action goal"),
-                text("  ?: Help"),
-                text("  q: Quit")
-            })
-        ) | borderLight;
-    });
+  auto left_pane = Renderer([]() {
+    return window(text("About"),
+                  vbox({text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
+                        text("ROS 2 Distro: Unknown"), separator(),
+                        text("Keybindings:"), text("  1-8: Switch tabs"),
+                        text("  w: Toggle focus"), text("  r: Refresh"),
+                        text("  e: Echo topic"), text("  c: Call service"),
+                        text("  g: Send action goal"), text("  ?: Help"),
+                        text("  q: Quit")})) |
+           borderLight;
+  });
 
-    auto right_pane = Renderer([this]() {
-        return window(text("Settings"), 
-            vbox({
-                text((config_.ui.auto_refresh_interval_ms > 0) ? "[x] Auto-refresh" : "[ ] Auto-refresh"),
-                text(config_.ui.mouse_support ? "[x] Mouse support" : "[ ] Mouse support")
-            })
-        ) | borderLight;
-    });
+  auto right_pane = Renderer([this]() {
+    return window(
+               text("Settings"),
+               vbox({text((config_.ui.auto_refresh_interval_ms > 0)
+                              ? "[x] Auto-refresh"
+                              : "[ ] Auto-refresh"),
+                     text(config_.ui.mouse_support ? "[x] Mouse support"
+                                                   : "[ ] Mouse support")})) |
+           borderLight;
+  });
 
-    return Renderer(Container::Horizontal({left_pane, right_pane}), [left_pane, right_pane]() {
-        return hbox({
-            left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
-            right_pane->Render() | flex
-        });
-    });
+  return Renderer(Container::Horizontal({left_pane, right_pane}),
+                  [left_pane, right_pane]() {
+                    return hbox(
+                        {left_pane->Render() | size(WIDTH, GREATER_THAN, 40),
+                         right_pane->Render() | flex});
+                  });
 }
 
 void LazyRTUIApp::run() {
-    auto screen = ScreenInteractive::Fullscreen();
-    screen_ = &screen;
+  auto screen = ScreenInteractive::Fullscreen();
+  screen_ = &screen;
 
-    auto tab_toggle = Toggle(&tab_names_, &selected_tab_);
-    
-    auto tab_container = Container::Tab({
-        make_nodes_tab(),
-        make_topics_tab(),
-        make_services_tab(),
-        make_actions_tab(),
-        make_interfaces_tab(),
-        make_bags_tab(),
-        make_tf_tab(),
-        make_about_tab()
-    }, &selected_tab_);
+  auto tab_toggle = Toggle(&tab_names_, &selected_tab_);
 
-    auto main_container = Container::Vertical({
-        tab_toggle,
-        tab_container
-    });
+  auto tab_container =
+      Container::Tab({make_nodes_tab(), make_topics_tab(), make_services_tab(),
+                      make_actions_tab(), make_interfaces_tab(),
+                      make_bags_tab(), make_tf_tab(), make_about_tab()},
+                     &selected_tab_);
 
-    auto renderer = Renderer(main_container, [this, tab_toggle, tab_container]() {
-        // Header
-        auto header = hbox({
-            text(" LazyRTUI v" LAZYRTUI_VERSION " ") | bold | inverted,
-            text(" "),
-            tab_toggle->Render() | flex,
-            text(" "),
-            text((ros_mgr_ && ros_mgr_->is_connected()) ? "●" : "●") | color((ros_mgr_ && ros_mgr_->is_connected()) ? Color::Green : Color::Red),
-            text(" ")
-        });
+  auto main_container = Container::Vertical({tab_toggle, tab_container});
 
-        // Footer
-        auto footer = hbox({
-            text(" 1-8:Tab  w:Focus  r:Refresh  e:Echo  c:Call  g:Goal  ?:Help  q:Quit ") | inverted | flex
-        });
+  auto renderer = Renderer(main_container, [this, tab_toggle, tab_container]() {
+    // Header
+    auto header =
+        hbox({text(" LazyRTUI v" LAZYRTUI_VERSION " ") | bold | inverted,
+              text(" "), tab_toggle->Render() | flex, text(" "),
+              text((ros_mgr_ && ros_mgr_->is_connected()) ? "●" : "●") |
+                  color((ros_mgr_ && ros_mgr_->is_connected()) ? Color::Green
+                                                               : Color::Red),
+              text(" ")});
 
-        auto main_view = vbox({
-            header,
-            separator(),
-            tab_container->Render() | flex,
-            separator(),
-            footer
-        });
-        
-        if (show_help_) {
-            auto help_modal = window(text(" Help ") | bold, vbox({
-                text("Keybindings:"),
-                separator(),
-                text(" 1-8 : Switch Tab"),
-                text(" w   : Toggle pane focus"),
-                text(" j/k : Navigate lists (vim style)"),
-                text(" r   : Manual refresh"),
-                text(" e   : Echo topic (Topics tab)"),
-                text(" c   : Call service (Services tab)"),
-                text(" g   : Send goal (Actions tab)"),
-                text(" ?   : Toggle this help menu"),
-                text(" q   : Quit application"),
-                text(""),
-                text("Press '?' or 'Esc' to dismiss") | dim
-            })) | clear_under | center;
-            return dbox({main_view, help_modal});
-        }
-        
-        return main_view;
-    });
+    // Footer
+    auto footer = hbox({text(" 1-8:Tab  w:Focus  r:Refresh  e:Echo  c:Call  "
+                             "g:Goal  ?:Help  q:Quit ") |
+                        inverted | flex});
 
-    auto event_handler = CatchEvent(renderer, [this, &screen](Event e) {
-        if (e == Event::Character('q')) {
-            screen.Exit();
-            return true;
-        }
-        if (e == Event::Character('?')) {
-            show_help_ = !show_help_;
-            return true;
-        }
-        if (e == Event::Escape && show_help_) {
-            show_help_ = false;
-            return true;
-        }
-        
-        if (e == Event::Character('1')) { selected_tab_ = 0; return true; }
-        if (e == Event::Character('2')) { selected_tab_ = 1; return true; }
-        if (e == Event::Character('3')) { selected_tab_ = 2; return true; }
-        if (e == Event::Character('4')) { selected_tab_ = 3; return true; }
-        if (e == Event::Character('5')) { selected_tab_ = 4; return true; }
-        if (e == Event::Character('6')) { selected_tab_ = 5; return true; }
-        if (e == Event::Character('7')) { selected_tab_ = 6; return true; }
-        if (e == Event::Character('8')) { selected_tab_ = 7; return true; }
-        
-        if (e == Event::Character('w')) {
-            if (selected_tab_ == 0) node_pane_focus_ = 1 - node_pane_focus_;
-            if (selected_tab_ == 1) topic_pane_focus_ = 1 - topic_pane_focus_;
-            if (selected_tab_ == 2) service_pane_focus_ = 1 - service_pane_focus_;
-            if (selected_tab_ == 3) action_pane_focus_ = 1 - action_pane_focus_;
-            if (selected_tab_ == 4) interface_pane_focus_ = 1 - interface_pane_focus_;
-            if (selected_tab_ == 6) tf_pane_focus_ = 1 - tf_pane_focus_;
-            return true;
-        }
-        
-        if (e == Event::Character('r')) {
-            refresh_data();
-            return true;
-        }
-        
-        if ((e == Event::Character('e') || e == Event::Character(' ') || e == Event::Return) && selected_tab_ == 1) {
-            toggle_topic_subscription(selected_topic_);
-            return true;
-        }
-        
-        if (e == Event::Character('c') && selected_tab_ == 2) {
-            service_response_ = "{\n  \"success\": true\n}";
-            return true;
-        }
-        
-        if (e == Event::Character('g') && selected_tab_ == 3) {
-            action_response_ = "Status: ACCEPTED\nResult: {}";
-            return true;
-        }
-        
-        if (e == Event::Character('j')) {
-            screen.PostEvent(Event::ArrowDown);
-            return true;
-        }
-        if (e == Event::Character('k')) {
-            screen.PostEvent(Event::ArrowUp);
-            return true;
-        }
-        
-        return false;
-    });
+    auto main_view = vbox({header, separator(), tab_container->Render() | flex,
+                           separator(), footer});
 
-    start_refresh_timer();
-    screen.Loop(event_handler);
-    stop_refresh_timer();
-    screen_ = nullptr;
+    if (show_help_) {
+      auto help_modal =
+          window(
+              text(" Help ") | bold,
+              vbox({text("Keybindings:"), separator(),
+                    text(" 1-8 : Switch Tab"), text(" w   : Toggle pane focus"),
+                    text(" j/k : Navigate lists (vim style)"),
+                    text(" r   : Manual refresh"),
+                    text(" e   : Echo topic (Topics tab)"),
+                    text(" c   : Call service (Services tab)"),
+                    text(" g   : Send goal (Actions tab)"),
+                    text(" ?   : Toggle this help menu"),
+                    text(" q   : Quit application"), text(""),
+                    text("Press '?' or 'Esc' to dismiss") | dim})) |
+          clear_under | center;
+      return dbox({main_view, help_modal});
+    }
+
+    return main_view;
+  });
+
+  auto event_handler = CatchEvent(renderer, [this, &screen](Event e) {
+    if (e == Event::Character('q')) {
+      screen.Exit();
+      return true;
+    }
+    if (e == Event::Character('?')) {
+      show_help_ = !show_help_;
+      return true;
+    }
+    if (e == Event::Escape && show_help_) {
+      show_help_ = false;
+      return true;
+    }
+
+    if (e == Event::Character('1')) {
+      selected_tab_ = 0;
+      return true;
+    }
+    if (e == Event::Character('2')) {
+      selected_tab_ = 1;
+      return true;
+    }
+    if (e == Event::Character('3')) {
+      selected_tab_ = 2;
+      return true;
+    }
+    if (e == Event::Character('4')) {
+      selected_tab_ = 3;
+      return true;
+    }
+    if (e == Event::Character('5')) {
+      selected_tab_ = 4;
+      return true;
+    }
+    if (e == Event::Character('6')) {
+      selected_tab_ = 5;
+      return true;
+    }
+    if (e == Event::Character('7')) {
+      selected_tab_ = 6;
+      return true;
+    }
+    if (e == Event::Character('8')) {
+      selected_tab_ = 7;
+      return true;
+    }
+
+    if (e == Event::Character('w')) {
+      if (selected_tab_ == 0)
+        node_pane_focus_ = 1 - node_pane_focus_;
+      if (selected_tab_ == 1)
+        topic_pane_focus_ = 1 - topic_pane_focus_;
+      if (selected_tab_ == 2)
+        service_pane_focus_ = 1 - service_pane_focus_;
+      if (selected_tab_ == 3)
+        action_pane_focus_ = 1 - action_pane_focus_;
+      if (selected_tab_ == 4)
+        interface_pane_focus_ = 1 - interface_pane_focus_;
+      if (selected_tab_ == 6)
+        tf_pane_focus_ = 1 - tf_pane_focus_;
+      return true;
+    }
+
+    if (e == Event::Character('r')) {
+      refresh_data();
+      return true;
+    }
+
+    if ((e == Event::Character('e') || e == Event::Character(' ') ||
+         e == Event::Return) &&
+        selected_tab_ == 1) {
+      toggle_topic_subscription(selected_topic_);
+      return true;
+    }
+
+    if (e == Event::Character('c') && selected_tab_ == 2) {
+      service_response_ = "{\n  \"success\": true\n}";
+      return true;
+    }
+
+    if (e == Event::Character('g') && selected_tab_ == 3) {
+      action_response_ = "Status: ACCEPTED\nResult: {}";
+      return true;
+    }
+
+    if (e == Event::Character('j')) {
+      screen.PostEvent(Event::ArrowDown);
+      return true;
+    }
+    if (e == Event::Character('k')) {
+      screen.PostEvent(Event::ArrowUp);
+      return true;
+    }
+
+    return false;
+  });
+
+  start_refresh_timer();
+  screen.Loop(event_handler);
+  stop_refresh_timer();
+  screen_ = nullptr;
 }
 
 } // namespace lazyrtui

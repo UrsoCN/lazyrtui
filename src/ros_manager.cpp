@@ -9,6 +9,12 @@
 #include <cstdio>
 #include <array>
 #include <memory>
+#include <map>
+#include <mutex>
+#include <dlfcn.h>
+#include <cmath>
+#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
+#include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 
 using namespace std::chrono_literals;
 
@@ -234,11 +240,6 @@ std::string ROS2Manager::get_action_goal_json(const std::string& action_name, co
     // TODO: Dynamic message introspection
     return "{\n  \"message\": \"Dynamic goal introspection not fully implemented yet\"\n}";
 }
-
-#include <dlfcn.h>
-#include <cmath>
-#include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
-#include <rosidl_typesupport_introspection_cpp/field_types.hpp>
 
 struct TypeSupportHandleInfo {
     void* lib_handle = nullptr;

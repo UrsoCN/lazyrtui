@@ -1,14 +1,14 @@
 #pragma once
 
-#include <string>
-#include <vector>
-#include <memory>
-#include <functional>
-#include <mutex>
 #include <atomic>
-#include <thread>
+#include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <set>
+#include <string>
+#include <thread>
+#include <vector>
 
 #include "lazyrtui/config_loader.hpp"
 #include "lazyrtui/python_plugin_engine.hpp"
@@ -23,85 +23,87 @@ class ROS2Manager;
 
 class LazyRTUIApp {
 public:
-    LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config& config);
-    ~LazyRTUIApp();
-    void run();
+  LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config &config);
+  ~LazyRTUIApp();
+  void run();
 
-    PythonPluginEngine* python_plugin_engine() { return python_plugin_engine_.get(); }
+  PythonPluginEngine *python_plugin_engine() {
+    return python_plugin_engine_.get();
+  }
 
 private:
-    // Tab component builders
-    ftxui::Component make_nodes_tab();
-    ftxui::Component make_topics_tab();
-    ftxui::Component make_services_tab();
-    ftxui::Component make_actions_tab();
-    ftxui::Component make_interfaces_tab();
-    ftxui::Component make_bags_tab();
-    ftxui::Component make_tf_tab();
-    ftxui::Component make_about_tab();
+  // Tab component builders
+  ftxui::Component make_nodes_tab();
+  ftxui::Component make_topics_tab();
+  ftxui::Component make_services_tab();
+  ftxui::Component make_actions_tab();
+  ftxui::Component make_interfaces_tab();
+  ftxui::Component make_bags_tab();
+  ftxui::Component make_tf_tab();
+  ftxui::Component make_about_tab();
 
-    void toggle_topic_subscription(int index);
+  void toggle_topic_subscription(int index);
 
-    // UI state
-    int selected_tab_ = 0;
-    std::vector<std::string> tab_names_;
-    bool show_help_ = false;
+  // UI state
+  int selected_tab_ = 0;
+  std::vector<std::string> tab_names_;
+  bool show_help_ = false;
 
-    // Data refresh
-    void refresh_data();
-    void start_refresh_timer();
-    void stop_refresh_timer();
+  // Data refresh
+  void refresh_data();
+  void start_refresh_timer();
+  void stop_refresh_timer();
 
-    std::shared_ptr<ROS2Manager> ros_mgr_;
-    Config config_;
+  std::shared_ptr<ROS2Manager> ros_mgr_;
+  Config config_;
 
-    // Screen pointer for PostEvent
-    ftxui::ScreenInteractive* screen_ = nullptr;
+  // Screen pointer for PostEvent
+  ftxui::ScreenInteractive *screen_ = nullptr;
 
-    // Refresh timer
-    std::atomic<bool> refresh_running_{false};
-    std::unique_ptr<std::thread> refresh_thread_;
+  // Refresh timer
+  std::atomic<bool> refresh_running_{false};
+  std::unique_ptr<std::thread> refresh_thread_;
 
-    // Data cached for UI
-    mutable std::mutex data_mutex_;
-    std::vector<std::string> nodes_list_;
-    std::vector<std::string> topics_list_;
-    std::vector<std::string> topics_menu_labels_;
-    std::vector<std::string> services_list_;
-    std::vector<std::string> actions_list_;
-    
-    // Node tab state
-    int selected_node_ = 0;
-    int node_pane_focus_ = 0; // 0=left, 1=right
-    
-    // Topic tab state (Multi-topic subscription support)
-    int selected_topic_ = 0;
-    int topic_pane_focus_ = 0;
-    std::set<std::string> subscribed_topics_;
-    std::map<std::string, std::vector<std::string>> topic_messages_map_;
+  // Data cached for UI
+  mutable std::mutex data_mutex_;
+  std::vector<std::string> nodes_list_;
+  std::vector<std::string> topics_list_;
+  std::vector<std::string> topics_menu_labels_;
+  std::vector<std::string> services_list_;
+  std::vector<std::string> actions_list_;
 
-    // Service tab state
-    int selected_service_ = 0;
-    int service_pane_focus_ = 0;
-    std::string service_request_json_ = "{}";
-    std::string service_response_;
+  // Node tab state
+  int selected_node_ = 0;
+  int node_pane_focus_ = 0; // 0=left, 1=right
 
-    // Action tab state
-    int selected_action_ = 0;
-    int action_pane_focus_ = 0;
-    std::string action_goal_json_ = "{}";
-    std::string action_response_;
+  // Topic tab state (Multi-topic subscription support)
+  int selected_topic_ = 0;
+  int topic_pane_focus_ = 0;
+  std::set<std::string> subscribed_topics_;
+  std::map<std::string, std::vector<std::string>> topic_messages_map_;
 
-    // Interfaces tab state
-    int selected_interface_ = 0;
-    int interface_pane_focus_ = 0;
+  // Service tab state
+  int selected_service_ = 0;
+  int service_pane_focus_ = 0;
+  std::string service_request_json_ = "{}";
+  std::string service_response_;
 
-    // TF tab state
-    int selected_tf_ = 0;
-    int tf_pane_focus_ = 0;
+  // Action tab state
+  int selected_action_ = 0;
+  int action_pane_focus_ = 0;
+  std::string action_goal_json_ = "{}";
+  std::string action_response_;
 
-    // Python Topic Plugin Engine
-    std::unique_ptr<PythonPluginEngine> python_plugin_engine_;
+  // Interfaces tab state
+  int selected_interface_ = 0;
+  int interface_pane_focus_ = 0;
+
+  // TF tab state
+  int selected_tf_ = 0;
+  int tf_pane_focus_ = 0;
+
+  // Python Topic Plugin Engine
+  std::unique_ptr<PythonPluginEngine> python_plugin_engine_;
 };
 
 } // namespace lazyrtui

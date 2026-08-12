@@ -90,6 +90,9 @@ private:
   ftxui::Component make_about_tab();
 
   void toggle_topic_subscription(int index);
+  // Service/action invocation shared by the tab buttons and keybindings.
+  void call_selected_service();
+  void send_selected_goal();
 
   // UI state
   int selected_tab_ = 0;

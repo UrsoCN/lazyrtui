@@ -478,6 +478,77 @@ Component LazyRTUIApp::make_topics_tab() {
   });
 }
 
+void LazyRTUIApp::call_selected_service() {
+  auto snap = std::atomic_load(&ui_snapshot_);
+  if (!snap || !ros_mgr_ || selected_service_ < 0 ||
+      selected_service_ >= (int)snap->services_list.size()) {
+    return;
+  }
+  const std::string& entry = snap->services_list[selected_service_];
+  size_t pos = entry.find(" [");
+  if (pos == std::string::npos) return;
+  std::string name = entry.substr(0, pos);
+  std::string type = entry.substr(pos + 2);
+  if (!type.empty() && type.back() == ']') type.pop_back();
+
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    service_response_ = "Calling " + name + " ...";
+  }
+  std::string request_json = service_request_json_;
+  ros_mgr_->call_service_async(
+      name, type, request_json,
+      [this](bool success, const std::string& response_json, double elapsed_ms) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        service_response_ = (success ? "[ok] " : "[error] ") + response_json +
+                            " (" + std::to_string(elapsed_ms) + " ms)";
+      });
+}
+
+void LazyRTUIApp::send_selected_goal() {
+  auto snap = std::atomic_load(&ui_snapshot_);
+  if (!snap || !ros_mgr_ || selected_action_ < 0 ||
+      selected_action_ >= (int)snap->actions_list.size()) {
+    return;
+  }
+  const std::string& entry = snap->actions_list[selected_action_];
+  size_t pos = entry.find(" [");
+  if (pos == std::string::npos) return;
+  std::string name = entry.substr(0, pos);
+  std::string type = entry.substr(pos + 2);
+  if (!type.empty() && type.back() == ']') type.pop_back();
+
+  const std::string service_name = name + "/_action/send_goal";
+  const std::string service_type = type + "_SendGoal_Service";
+
+  nlohmann::json goal;
+  try {
+    goal = nlohmann::json::parse(action_goal_json_);
+  } catch (...) {
+    goal = nlohmann::json::object();
+  }
+  std::vector<uint8_t> uuid_bytes(16);
+  {
+    std::random_device rd;
+    for (auto& b : uuid_bytes) b = static_cast<uint8_t>(rd());
+  }
+  nlohmann::json request;
+  request["goal_id"] = {{"uuid", uuid_bytes}};
+  request["goal"] = goal;
+
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    action_response_ = "Sending goal to " + name + " ...";
+  }
+  ros_mgr_->call_service_async(
+      service_name, service_type, request.dump(),
+      [this](bool success, const std::string& response_json, double elapsed_ms) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        action_response_ = (success ? "[ok] " : "[error] ") + response_json +
+                           " (" + std::to_string(elapsed_ms) + " ms)";
+      });
+}
+
 Component LazyRTUIApp::make_services_tab() {
   MenuOption menu_opt;
   menu_opt.on_change = [this]() {
@@ -509,33 +580,7 @@ Component LazyRTUIApp::make_services_tab() {
   });
 
   auto input_json = Input(&service_request_json_, "{}");
-  auto call_btn = Button("Call Service", [this]() {
-    auto snap = std::atomic_load(&ui_snapshot_);
-    if (!snap || !ros_mgr_ || selected_service_ < 0 ||
-        selected_service_ >= (int)snap->services_list.size()) {
-      return;
-    }
-    const std::string& entry = snap->services_list[selected_service_];
-    size_t pos = entry.find(" [");
-    if (pos == std::string::npos) return;
-    std::string name = entry.substr(0, pos);
-    std::string type = entry.substr(pos + 2);
-    if (!type.empty() && type.back() == ']') type.pop_back();
-
-    {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      service_response_ = "Calling " + name + " ...";
-    }
-    std::string request_json = service_request_json_;
-    ros_mgr_->call_service_async(
-        name, type, request_json,
-        [this](bool success, const std::string& response_json,
-               double elapsed_ms) {
-          std::lock_guard<std::mutex> lock(data_mutex_);
-          service_response_ = (success ? "[ok] " : "[error] ") + response_json +
-                              " (" + std::to_string(elapsed_ms) + " ms)";
-        });
-  });
+  auto call_btn = Button("Call Service", [this]() { call_selected_service(); });
 
   auto right_container = Container::Vertical({input_json, call_btn});
 
@@ -601,53 +646,7 @@ Component LazyRTUIApp::make_actions_tab() {
   });
 
   auto input_json = Input(&action_goal_json_, "{}");
-  auto goal_btn = Button("Send Goal", [this]() {
-    auto snap = std::atomic_load(&ui_snapshot_);
-    if (!snap || !ros_mgr_ || selected_action_ < 0 ||
-        selected_action_ >= (int)snap->actions_list.size()) {
-      return;
-    }
-    const std::string& entry = snap->actions_list[selected_action_];
-    size_t pos = entry.find(" [");
-    if (pos == std::string::npos) return;
-    std::string name = entry.substr(0, pos);
-    std::string type = entry.substr(pos + 2);
-    if (!type.empty() && type.back() == ']') type.pop_back();
-
-    // A goal is delivered through the action's send_goal service, reusing the
-    // dynamic service client (no raw rcl_action needed).
-    const std::string service_name = name + "/_action/send_goal";
-    const std::string service_type = type + "_SendGoal_Service";
-
-    nlohmann::json goal;
-    try {
-      goal = nlohmann::json::parse(action_goal_json_);
-    } catch (...) {
-      goal = nlohmann::json::object();
-    }
-    // goal_id is unique_identifier_msgs/msg/UUID (uint8 uuid[16]).
-    std::vector<uint8_t> uuid_bytes(16);
-    {
-      std::random_device rd;
-      for (auto& b : uuid_bytes) b = static_cast<uint8_t>(rd());
-    }
-    nlohmann::json request;
-    request["goal_id"] = {{"uuid", uuid_bytes}};
-    request["goal"] = goal;
-
-    {
-      std::lock_guard<std::mutex> lock(data_mutex_);
-      action_response_ = "Sending goal to " + name + " ...";
-    }
-    ros_mgr_->call_service_async(
-        service_name, service_type, request.dump(),
-        [this](bool success, const std::string& response_json,
-               double elapsed_ms) {
-          std::lock_guard<std::mutex> lock(data_mutex_);
-          action_response_ = (success ? "[ok] " : "[error] ") + response_json +
-                             " (" + std::to_string(elapsed_ms) + " ms)";
-        });
-  });
+  auto goal_btn = Button("Send Goal", [this]() { send_selected_goal(); });
 
   auto right_container = Container::Vertical({input_json, goal_btn});
 
@@ -891,11 +890,17 @@ void LazyRTUIApp::run() {
   });
 
   auto event_handler = CatchEvent(renderer, [this, &screen](Event e) {
-    if (e == Event::Character('q')) {
+    // Match a configured single-character keybinding. Empty bindings (and
+    // non-character events) never match, so a disabled binding cannot fire.
+    auto key_is = [&e](const std::string& binding) {
+      return e.is_character() && e.character() == binding;
+    };
+
+    if (key_is(config_.keybindings.quit)) {
       screen.Exit();
       return true;
     }
-    if (e == Event::Character('?')) {
+    if (key_is(config_.keybindings.help)) {
       show_help_ = !show_help_;
       return true;
     }
@@ -937,7 +942,7 @@ void LazyRTUIApp::run() {
       return true;
     }
 
-    if (e == Event::Character('w')) {
+    if (key_is(config_.keybindings.switch_focus)) {
       if (selected_tab_ == 0)
         node_pane_focus_ = 1 - node_pane_focus_;
       if (selected_tab_ == 1)
@@ -947,31 +952,31 @@ void LazyRTUIApp::run() {
       if (selected_tab_ == 3)
         action_pane_focus_ = 1 - action_pane_focus_;
       if (selected_tab_ == 4)
-        interface_pane_focus_ = 1 - interface_pane_focus_;
+        interface_pane_focus_ = (interface_pane_focus_ + 1) % 3;  // 3 panes.
       if (selected_tab_ == 6)
         tf_pane_focus_ = 1 - tf_pane_focus_;
       return true;
     }
 
-    if (e == Event::Character('r')) {
+    if (key_is(config_.keybindings.refresh)) {
       refresh_data();
       return true;
     }
 
-    if ((e == Event::Character('e') || e == Event::Character(' ') ||
-         e == Event::Return) &&
-        selected_tab_ == 1) {
+    if (selected_tab_ == 1 &&
+        (key_is(config_.keybindings.echo_topic) || e == Event::Character(' ') ||
+         e == Event::Return)) {
       toggle_topic_subscription(selected_topic_);
       return true;
     }
 
-    if (e == Event::Character('c') && selected_tab_ == 2) {
-      service_response_ = "{\n  \"success\": true\n}";
+    if (key_is(config_.keybindings.call_service) && selected_tab_ == 2) {
+      call_selected_service();
       return true;
     }
 
-    if (e == Event::Character('g') && selected_tab_ == 3) {
-      action_response_ = "Status: ACCEPTED\nResult: {}";
+    if (key_is(config_.keybindings.send_goal) && selected_tab_ == 3) {
+      send_selected_goal();
       return true;
     }
 

@@ -111,4 +111,22 @@ install(TARGETS lazyrtui
 install(DIRECTORY include/
   DESTINATION include)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+
+  ament_add_gtest(test_tf_tree test/tf_tree_test.cpp src/tf_tree.cpp)
+  target_include_directories(test_tf_tree PRIVATE include)
+
+  ament_add_gtest(test_config_loader test/config_loader_test.cpp src/config_loader.cpp)
+  target_include_directories(test_config_loader PRIVATE include)
+  target_link_libraries(test_config_loader yaml-cpp)
+
+  ament_add_gtest(test_ftxui_converter test/ftxui_converter_test.cpp src/ftxui_converter.cpp)
+  target_include_directories(test_ftxui_converter PRIVATE include)
+  target_link_libraries(test_ftxui_converter ftxui::dom nlohmann_json::nlohmann_json)
+
+  ament_add_gtest(test_cdr_utils test/cdr_utils_test.cpp)
+  target_include_directories(test_cdr_utils PRIVATE src)
+endif()
+
 ament_package()

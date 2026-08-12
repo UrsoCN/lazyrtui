@@ -128,6 +128,13 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_cdr_utils test/cdr_utils_test.cpp)
   target_include_directories(test_cdr_utils PRIVATE src)
+
+  ament_add_gtest(test_python_plugin_engine test/python_plugin_engine_test.cpp
+                  src/python_plugin_engine.cpp)
+  target_include_directories(test_python_plugin_engine PRIVATE
+                             include ${Python3_INCLUDE_DIRS})
+  target_link_libraries(test_python_plugin_engine ${Python3_LIBRARIES}
+                        nlohmann_json::nlohmann_json)
 endif()
 
 ament_package()

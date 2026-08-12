@@ -2,13 +2,15 @@
 #include <gtest/gtest.h>
 #include <cstdint>
 #include <cstring>
-#include <type_traits>
 
 namespace lazyrtui {
 
-// Typed parameterized coverage over every scalar width the CDR parser reads.
+// Typed parameterized coverage over every integer scalar width the CDR parser
+// reads (unsigned and signed). Float/double swap is deferred to a later stage
+// (needs memcpy-based comparison to avoid NaN bit-pattern issues).
 template <typename T> class CdrByteSwapTest : public ::testing::Test {};
-using ByteSwapTypes = ::testing::Types<uint8_t, uint16_t, uint32_t, uint64_t>;
+using ByteSwapTypes = ::testing::Types<uint8_t, uint16_t, uint32_t, uint64_t,
+                                       int16_t, int32_t, int64_t>;
 TYPED_TEST_SUITE(CdrByteSwapTest, ByteSwapTypes);
 
 TYPED_TEST(CdrByteSwapTest, ReversesByteOrder) {
@@ -16,7 +18,8 @@ TYPED_TEST(CdrByteSwapTest, ReversesByteOrder) {
   // against an independent shift-based reference (not against swap-of-swap).
   TypeParam value = static_cast<TypeParam>(0);
   for (unsigned i = 0; i < sizeof(TypeParam); ++i) {
-    value = static_cast<TypeParam>((static_cast<uint64_t>(value) << 8) | (i + 1));
+    const uint64_t shifted = static_cast<uint64_t>(value) << 8;
+    value = static_cast<TypeParam>(shifted | (i + 1));
   }
   TypeParam expected = static_cast<TypeParam>(0);
   for (unsigned i = 0; i < sizeof(TypeParam); ++i) {
@@ -29,25 +32,21 @@ TYPED_TEST(CdrByteSwapTest, ReversesByteOrder) {
 
 TYPED_TEST(CdrByteSwapTest, IsInvolution) {
   // Swapping twice restores the original for representative bit patterns:
-  // all-ones, zero, and a multi-bit scramble.
+  // all-ones, zero, and a multi-bit scramble. Symmetric patterns are also
+  // asserted directly (swap(x) == x for all-ones and zero).
   TypeParam ones = static_cast<TypeParam>(~TypeParam{0});
   EXPECT_EQ(cdr_byte_swap<TypeParam>(cdr_byte_swap<TypeParam>(ones)), ones);
+  EXPECT_EQ(cdr_byte_swap<TypeParam>(ones), ones);
 
   TypeParam zero = static_cast<TypeParam>(0);
   EXPECT_EQ(cdr_byte_swap<TypeParam>(cdr_byte_swap<TypeParam>(zero)), zero);
+  EXPECT_EQ(cdr_byte_swap<TypeParam>(zero), zero);
 
   TypeParam scramble = static_cast<TypeParam>(
-      0x12345678ULL & (sizeof(TypeParam) == 8 ? ~0ULL
-                                              : (1ULL << (8 * sizeof(TypeParam))) - 1));
+      0x12345678ULL &
+      (sizeof(TypeParam) == 8 ? ~0ULL : (1ULL << (8 * sizeof(TypeParam))) - 1));
   EXPECT_EQ(cdr_byte_swap<TypeParam>(cdr_byte_swap<TypeParam>(scramble)),
             scramble);
-}
-
-TYPED_TEST(CdrByteSwapTest, ZeroAndAllOnesAreSymmetric) {
-  EXPECT_EQ(cdr_byte_swap<TypeParam>(static_cast<TypeParam>(0)),
-            static_cast<TypeParam>(0));
-  TypeParam ones = static_cast<TypeParam>(~TypeParam{0});
-  EXPECT_EQ(cdr_byte_swap<TypeParam>(ones), ones);
 }
 
 TEST(CdrUtilsTest, HostEndiannessProbeMatchesMemcpyProbe) {

@@ -25,6 +25,14 @@ void TFTree::update_transform(const std::string &parent,
   }
 
   auto &child_node = child_it->second;
+  // Re-parenting: remove the child from its previous parent's children map so
+  // stale branch pointers don't survive a parent change.
+  if (!child_node->parent_id.empty() && child_node->parent_id != parent) {
+    auto old_parent_it = frames_.find(child_node->parent_id);
+    if (old_parent_it != frames_.end()) {
+      old_parent_it->second->children.erase(child);
+    }
+  }
   child_node->parent_id = parent;
   child_node->translation.x = tx;
   child_node->translation.y = ty;

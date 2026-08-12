@@ -122,19 +122,30 @@ TEST(FTXUIConverterTest, GaugeEmptyIsBlank) {
 }
 
 TEST(FTXUIConverterTest, GaugeClampsProgressToUnitInterval) {
-  // progress is clamped to [0,1] by the converter (issue: NaN-adjacent input).
+  // progress is clamped to [0,1] by the converter. Over/under values are also
+  // clamped internally by FTXUI, so the discriminator is NaN: the converter's
+  // std::min(1.0f, NaN) == 1.0f (full), while a bare FTXUI gauge maps NaN to
+  // 0 (empty) — only the NaN case pins the converter's clamp.
   auto over = FTXUIConverter::parse_ui_spec(
       {{"type", "gauge"}, {"progress", 2.5}});
   auto under = FTXUIConverter::parse_ui_spec(
       {{"type", "gauge"}, {"progress", -1.0}});
+  auto nan_progress = FTXUIConverter::parse_ui_spec(
+      {{"type", "gauge"}, {"progress", std::nan("")}});
   auto full = FTXUIConverter::parse_ui_spec(
       {{"type", "gauge"}, {"progress", 1.0}});
   auto empty = FTXUIConverter::parse_ui_spec(
       {{"type", "gauge"}, {"progress", 0.0}});
   ASSERT_EQ(over.size(), 1u);
   ASSERT_EQ(under.size(), 1u);
+  ASSERT_EQ(nan_progress.size(), 1u);
+  ASSERT_EQ(full.size(), 1u);
+  ASSERT_EQ(empty.size(), 1u);
   EXPECT_EQ(RenderToString(over[0], 5, 1), RenderToString(full[0], 5, 1));
   EXPECT_EQ(RenderToString(under[0], 5, 1), RenderToString(empty[0], 5, 1));
+  // NaN must be clamped to full (converter), not empty (bare FTXUI would give).
+  EXPECT_EQ(RenderToString(nan_progress[0], 5, 1),
+            RenderToString(full[0], 5, 1));
 }
 
 TEST(FTXUIConverterTest, GaugeDirectionVariantsRender) {
@@ -146,6 +157,14 @@ TEST(FTXUIConverterTest, GaugeDirectionVariantsRender) {
     ASSERT_EQ(elements.size(), 1u);
     EXPECT_NO_THROW(RenderToString(elements[0], 5, 3)) << "direction=" << dir;
   }
+  // Unknown direction falls back to the "right" default — identical render.
+  auto right = FTXUIConverter::parse_ui_spec(
+      {{"type", "gauge"}, {"progress", 0.5}, {"direction", "right"}});
+  auto bogus = FTXUIConverter::parse_ui_spec(
+      {{"type", "gauge"}, {"progress", 0.5}, {"direction", "bogus"}});
+  ASSERT_EQ(right.size(), 1u);
+  ASSERT_EQ(bogus.size(), 1u);
+  EXPECT_EQ(RenderToString(bogus[0], 5, 1), RenderToString(right[0], 5, 1));
 }
 
 TEST(FTXUIConverterTest, CanvasWithDrawOpsRenders) {
@@ -160,8 +179,9 @@ TEST(FTXUIConverterTest, CanvasWithDrawOpsRenders) {
                    {{"op", "text"}, {"x", 0}, {"y", 0}, {"content", "T"}}})}};
   auto elements = FTXUIConverter::parse_ui_spec(spec);
   ASSERT_EQ(elements.size(), 1u);
-  // Canvas pixels render as braille-dot cells; the frame must not be empty.
-  EXPECT_NO_THROW(RenderToString(elements[0], 5, 3));
+  // Canvas pixels render as braille-dot cells: with ops drawn, the frame must
+  // differ from the blank canvas (catches dropped/ignored draw ops).
+  EXPECT_NE(RenderToString(elements[0], 5, 3), "     \r\n     \r\n     ");
 }
 
 TEST(FTXUIConverterTest, CanvasWithoutDrawRendersBlank) {
@@ -197,6 +217,64 @@ TEST(FTXUIConverterTest, ColorNameSetsForeground) {
   ftxui::Screen screen(1, 1);
   ftxui::Render(screen, elements[0]);
   EXPECT_EQ(screen.CellAt(0, 0).foreground_color, ftxui::Color::Red);
+}
+
+TEST(FTXUIConverterTest, BgColorNameSetsBackground) {
+  nlohmann::json spec = {{"type", "text"},
+                         {"content", "x"},
+                         {"bgcolor", "green"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  ftxui::Screen screen(1, 1);
+  ftxui::Render(screen, elements[0]);
+  EXPECT_EQ(screen.CellAt(0, 0).background_color, ftxui::Color::Green);
+}
+
+TEST(FTXUIConverterTest, BgColorHexParsesToRgb) {
+  nlohmann::json spec = {{"type", "text"},
+                         {"content", "x"},
+                         {"bgcolor", "#00FF00"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  ftxui::Screen screen(1, 1);
+  ftxui::Render(screen, elements[0]);
+  EXPECT_EQ(screen.CellAt(0, 0).background_color, ftxui::Color::RGB(0, 255, 0));
+}
+
+TEST(FTXUIConverterTest, StyleFlagsSetCellAttributes) {
+  nlohmann::json spec = {{"type", "text"},
+                         {"content", "x"},
+                         {"dim", true},
+                         {"italic", true},
+                         {"underline", true}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  ftxui::Screen screen(1, 1);
+  ftxui::Render(screen, elements[0]);
+  EXPECT_TRUE(screen.CellAt(0, 0).dim);
+  EXPECT_TRUE(screen.CellAt(0, 0).italic);
+  EXPECT_TRUE(screen.CellAt(0, 0).underlined);
+}
+
+TEST(FTXUIConverterTest, StyleStringWithColorSetsForeground) {
+  nlohmann::json spec = {{"type", "text"},
+                         {"content", "x"},
+                         {"style", "bold red"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  ftxui::Screen screen(1, 1);
+  ftxui::Render(screen, elements[0]);
+  EXPECT_TRUE(screen.CellAt(0, 0).bold);
+  EXPECT_EQ(screen.CellAt(0, 0).foreground_color, ftxui::Color::Red);
+}
+
+TEST(FTXUIConverterTest, ContentKeyTakesPrecedenceOverText) {
+  nlohmann::json spec = {{"type", "text"},
+                         {"content", "winner"},
+                         {"text", "loser"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  EXPECT_EQ(RenderToString(elements[0], 6, 1), "winner");
 }
 
 TEST(FTXUIConverterTest, HexColorParsesToRgb) {

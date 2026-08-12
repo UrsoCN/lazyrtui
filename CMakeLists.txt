@@ -123,7 +123,8 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_ftxui_converter test/ftxui_converter_test.cpp src/ftxui_converter.cpp)
   target_include_directories(test_ftxui_converter PRIVATE include)
-  target_link_libraries(test_ftxui_converter ftxui::dom nlohmann_json::nlohmann_json)
+  target_link_libraries(test_ftxui_converter ftxui::dom ftxui::screen
+                        nlohmann_json::nlohmann_json)
 
   ament_add_gtest(test_cdr_utils test/cdr_utils_test.cpp)
   target_include_directories(test_cdr_utils PRIVATE src)

@@ -10,6 +10,10 @@
 namespace {
 std::atomic<bool> g_shutdown_requested{false};
 std::atomic<int> g_shutdown_signal{0};
+// The handler below runs in async-signal-safe context; these primitives must
+// be lock-free on every supported platform.
+static_assert(std::atomic<bool>::is_always_lock_free);
+static_assert(std::atomic<int>::is_always_lock_free);
 }  // namespace
 
 // Async-signal-safe handler: only re-arms the default disposition and records
@@ -37,7 +41,9 @@ int main(int argc, char **argv) {
   }
 
   // Run TUI application (skipped if a shutdown signal arrived before startup
-  // completed; during the loop, FTXUI's own handlers exit gracefully).
+  // completed; during the loop, FTXUI's own handlers exit gracefully). This
+  // check is best-effort: a signal landing between this check and FTXUI's
+  // handler installation is caught and handled by FTXUI's loop instead.
   if (!g_shutdown_requested.load()) {
     lazyrtui::LazyRTUIApp app(ros_mgr, config);
     app.run();
@@ -49,5 +55,7 @@ int main(int argc, char **argv) {
     ros_mgr.reset();
   }
 
-  return 0;
+  // Preserve pre-loop signal exit codes (e.g. SIGINT -> 2) for scripts/systemd;
+  // 0 when the app exits normally or via FTXUI's in-loop handler.
+  return g_shutdown_signal.load();
 }

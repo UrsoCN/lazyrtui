@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <map>
 #include <memory>
@@ -62,6 +63,8 @@ private:
 
   // Refresh timer
   std::atomic<bool> refresh_running_{false};
+  std::mutex refresh_mutex_;            // Guards refresh_cv_/refresh_running_.
+  std::condition_variable refresh_cv_;  // Interruptible sleep for the refresh loop.
   std::unique_ptr<std::thread> refresh_thread_;
 
   // Data cached for UI

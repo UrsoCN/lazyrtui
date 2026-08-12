@@ -144,8 +144,18 @@ void LazyRTUIApp::start_refresh_timer() {
     return;
   refresh_running_ = true;
   refresh_thread_ = std::make_unique<std::thread>([this]() {
-    while (refresh_running_) {
-      std::this_thread::sleep_for(std::chrono::seconds(2));
+    const auto interval =
+        std::chrono::milliseconds(config_.ui.auto_refresh_interval_ms);
+    while (true) {
+      std::unique_lock<std::mutex> lock(refresh_mutex_);
+      // Sleep interruptibly: stop_refresh_timer() wakes us immediately.
+      refresh_cv_.wait_for(lock, interval,
+                           [this]() { return !refresh_running_.load(); });
+      if (!refresh_running_.load()) {
+        break;
+      }
+      lock.unlock();
+
       refresh_data();
       if (screen_) {
         screen_->PostEvent(Event::Custom);
@@ -155,7 +165,11 @@ void LazyRTUIApp::start_refresh_timer() {
 }
 
 void LazyRTUIApp::stop_refresh_timer() {
-  refresh_running_ = false;
+  {
+    std::lock_guard<std::mutex> lock(refresh_mutex_);
+    refresh_running_ = false;
+  }
+  refresh_cv_.notify_all();
   if (refresh_thread_ && refresh_thread_->joinable()) {
     refresh_thread_->join();
   }

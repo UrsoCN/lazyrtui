@@ -400,9 +400,17 @@ static bool fill_struct_field(const ::rosidl_typesupport_introspection_cpp::Mess
         elem_member.is_array_ = false;
         elem_member.array_size_ = 0;
         for (size_t j = 0; j < count; ++j) {
-            if (!fill_struct_field(elem_member, member.get_function(field, j),
-                                   value[j])) {
-                return false;
+            void* elem = member.get_function ? member.get_function(field, j) : nullptr;
+            if (elem) {
+                if (!fill_struct_field(elem_member, elem, value[j])) return false;
+            } else if (member.type_id_ == ROS_TYPE_BOOLEAN && member.assign_function) {
+                // std::vector<bool> stores packed bits and exposes no element
+                // accessor: assign through the generated assign_function.
+                if (!value[j].is_boolean()) return false;
+                bool b = value[j].get<bool>();
+                member.assign_function(field, j, &b);
+            } else {
+                return false;  // No element accessor available.
             }
         }
         return true;
@@ -469,7 +477,7 @@ static bool fill_struct_field(const ::rosidl_typesupport_introspection_cpp::Mess
             if (!value.is_string()) return false;
             std::string str = value.get<std::string>();
             if (member.string_upper_bound_ > 0 &&
-                str.size() + 1 > member.string_upper_bound_) {
+                str.size() > member.string_upper_bound_) {
                 return false;  // Exceeds the declared upper bound.
             }
             static_cast<std::string*>(field)->assign(str);
@@ -524,7 +532,18 @@ static void read_struct_field(const ::rosidl_typesupport_introspection_cpp::Mess
         elem_member.array_size_ = 0;
         for (size_t j = 0; j < count; ++j) {
             if (j > 0) ss << ", ";
-            read_struct_field(elem_member, member.get_const_function(field, j), ss, indent_level);
+            const void* elem =
+                member.get_const_function ? member.get_const_function(field, j) : nullptr;
+            if (elem) {
+                read_struct_field(elem_member, elem, ss, indent_level);
+            } else if (member.type_id_ == ROS_TYPE_BOOLEAN && member.fetch_function) {
+                // std::vector<bool>: fetch the packed bit into a local bool.
+                bool b = false;
+                member.fetch_function(field, j, &b);
+                ss << (b ? "true" : "false");
+            } else {
+                ss << "null";
+            }
         }
         ss << "]";
         return;
@@ -923,6 +942,14 @@ void ROS2Manager::call_service_async(const std::string& service_name, const std:
             return;
         }
 
+        // Keep the node alive for the whole worker: stop() resets
+        // impl_->node_ while this detached thread may still be running.
+        auto node = impl_->node_;
+        if (!node) {
+            callback(false, "ROS 2 is shutting down", elapsed_ms());
+            return;
+        }
+
         const rosidl_service_type_support_t* ts = nullptr;
         const auto* members = get_service_members(type_str, &ts);
         if (!members || !ts) {
@@ -944,7 +971,7 @@ void ROS2Manager::call_service_async(const std::string& service_name, const std:
         }
 
         rcl_node_t* node_handle =
-            impl_->node_->get_node_base_interface()->get_rcl_node_handle();
+            node->get_node_base_interface()->get_rcl_node_handle();
 
         // RAII: rcl_client_fini needs the node handle and runs on every exit.
         struct ClientRaii {
@@ -1105,6 +1132,15 @@ std::string ROS2Manager::get_interface_detail(const std::string& type_str) {
             name = type_str.substr(s1 + 1);
         }
         if (pkg.empty() || name.empty()) return "Error: invalid type '" + type_str + "'";
+
+        // Reject path traversal: name/kind become file-path components.
+        auto is_unsafe = [](const std::string& s) {
+            return s.find('/') != std::string::npos ||
+                   s.find('\\') != std::string::npos || s == "..";
+        };
+        if (is_unsafe(name) || is_unsafe(kind)) {
+            return "Error: invalid type '" + type_str + "'";
+        }
 
         std::vector<std::string> kinds;
         std::vector<std::string> exts;

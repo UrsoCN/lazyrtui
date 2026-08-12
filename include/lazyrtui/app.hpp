@@ -50,7 +50,8 @@ class SnapshotStringList : public ftxui::ConstStringListRef::Adapter {
   std::string_view operator[](size_t i) const override {
     auto list = std::atomic_load(&list_);
     if (list && i < list->size()) {
-      return (*list)[i];
+      scratch_ = (*list)[i];  // Copy while `list_` still holds the data alive.
+      return scratch_;
     }
     return "";
   }
@@ -60,6 +61,10 @@ class SnapshotStringList : public ftxui::ConstStringListRef::Adapter {
 
  private:
   std::shared_ptr<const std::vector<std::string>> list_;
+  // Only touched from the UI thread inside operator[] (Menu renders
+  // synchronously), so a single scratch slot is safe against concurrent
+  // publish() calls.
+  mutable std::string scratch_;
 };
 
 class LazyRTUIApp {

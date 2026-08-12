@@ -479,10 +479,12 @@ Component LazyRTUIApp::make_services_tab() {
   auto right_container = Container::Vertical({input_json, call_btn});
 
   auto right_pane = Renderer(right_container, [this, input_json, call_btn]() {
-    std::string selected = (selected_service_ >= 0 &&
-                            selected_service_ < (int)services_list_.size())
-                               ? services_list_[selected_service_]
-                               : "None";
+    auto snap = std::atomic_load(&ui_snapshot_);
+    std::string selected = "None";
+    if (snap && selected_service_ >= 0 &&
+        selected_service_ < (int)snap->services_list.size()) {
+      selected = snap->services_list[selected_service_];
+    }
 
     return window(text("Service Caller: " + selected),
                   vbox({text("Request JSON:"), input_json->Render() | border,
@@ -516,10 +518,12 @@ Component LazyRTUIApp::make_actions_tab() {
   auto right_container = Container::Vertical({input_json, goal_btn});
 
   auto right_pane = Renderer(right_container, [this, input_json, goal_btn]() {
-    std::string selected =
-        (selected_action_ >= 0 && selected_action_ < (int)actions_list_.size())
-            ? actions_list_[selected_action_]
-            : "None";
+    auto snap = std::atomic_load(&ui_snapshot_);
+    std::string selected = "None";
+    if (snap && selected_action_ >= 0 &&
+        selected_action_ < (int)snap->actions_list.size()) {
+      selected = snap->actions_list[selected_action_];
+    }
 
     return window(
                text("Action Client: " + selected),

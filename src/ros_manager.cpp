@@ -1074,7 +1074,12 @@ void ROS2Manager::execute_service_call(const std::string& service_name, const st
         rcl_node_t* node = nullptr;
         bool initialized = false;
         ~ClientRaii() {
-            if (initialized) (void)rcl_client_fini(&client, node);
+            if (initialized) {
+                // A destructor cannot propagate the error; store the result to
+                // silence -Wunused-result (a plain (void) cast does not).
+                const rcl_ret_t rc = rcl_client_fini(&client, node);
+                (void)rc;
+            }
         }
     } client_raii;
     client_raii.node = node_handle;

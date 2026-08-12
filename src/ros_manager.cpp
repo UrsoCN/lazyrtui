@@ -1007,6 +1007,12 @@ void ROS2Manager::call_service_async(const std::string& service_name, const std:
                                      const std::string& request_json, ServiceCallback callback) {
     // Route the call onto the managed worker; no per-call detached threads.
     std::lock_guard<std::mutex> lock(impl_->queue_mutex_);
+    if (impl_->worker_shutdown_.load() || stop_requested_.load()) {
+        // Fail fast instead of silently dropping the task: the UI would
+        // otherwise wait forever for a response callback after shutdown.
+        callback(false, "ROS 2 is shutting down", 0.0);
+        return;
+    }
     impl_->tasks_.emplace([this, service_name, type_str, request_json, callback]() {
         execute_service_call(service_name, type_str, request_json, callback);
     });
@@ -1068,7 +1074,7 @@ void ROS2Manager::execute_service_call(const std::string& service_name, const st
         rcl_node_t* node = nullptr;
         bool initialized = false;
         ~ClientRaii() {
-            if (initialized) rcl_client_fini(&client, node);
+            if (initialized) (void)rcl_client_fini(&client, node);
         }
     } client_raii;
     client_raii.node = node_handle;

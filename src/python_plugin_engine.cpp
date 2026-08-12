@@ -10,6 +10,26 @@
 
 namespace fs = std::filesystem;
 
+namespace {
+
+// RAII guard acquiring the Python GIL for the calling thread. Every public
+// entry point of PythonPluginEngine wraps its Python C API work in this guard
+// so the engine is safe to call from any thread (UI, refresh timer, or ROS
+// callbacks). PyGILState_Ensure/Release is reentrant, so nested Python calls
+// on the same thread remain balanced.
+class GilGuard {
+ public:
+  GilGuard() : state_(PyGILState_Ensure()) {}
+  ~GilGuard() { PyGILState_Release(state_); }
+  GilGuard(const GilGuard &) = delete;
+  GilGuard &operator=(const GilGuard &) = delete;
+
+ private:
+  PyGILState_STATE state_;
+};
+
+}  // namespace
+
 namespace lazyrtui {
 
 PythonPluginEngine::PythonPluginEngine() {
@@ -20,6 +40,7 @@ PythonPluginEngine::PythonPluginEngine() {
 }
 
 PythonPluginEngine::~PythonPluginEngine() {
+  GilGuard guard;  // Py_XDECREF requires the GIL.
   for (auto &[topic, state] : topic_states_) {
     Py_XDECREF(state);
   }
@@ -61,6 +82,7 @@ std::string PythonPluginEngine::fetch_python_error() {
 }
 
 void PythonPluginEngine::load_plugins_from_dir(const std::string &dir_path) {
+  GilGuard guard;
   if (!fs::exists(dir_path) || !fs::is_directory(dir_path))
     return;
 
@@ -80,6 +102,7 @@ void PythonPluginEngine::load_plugins_from_dir(const std::string &dir_path) {
 }
 
 bool PythonPluginEngine::load_plugin_file(const std::string &file_path) {
+  GilGuard guard;
   fs::path p(file_path);
   std::string module_name = p.stem().string();
   std::string parent_dir = p.parent_path().string();
@@ -142,6 +165,7 @@ bool PythonPluginEngine::load_plugin_file(const std::string &file_path) {
 std::string
 PythonPluginEngine::find_matching_plugin(const std::string &topic_name,
                                          const std::string &msg_type) {
+  GilGuard guard;
   for (const auto &[mod_name, module] : plugin_modules_) {
     PyObject *match_func = PyObject_GetAttrString(module, "match");
     if (match_func && PyCallable_Check(match_func)) {
@@ -170,6 +194,7 @@ nlohmann::json
 PythonPluginEngine::render_message(const std::string &module_name,
                                    const std::string &topic_name,
                                    const std::string &json_body) {
+  GilGuard guard;
   auto it = plugin_modules_.find(module_name);
   if (it == plugin_modules_.end()) {
     return {{"type", "text"},

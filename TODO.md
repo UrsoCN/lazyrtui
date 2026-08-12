@@ -43,4 +43,4 @@
 - [ ] **`update_transform` 环检测**：当前允许 A→B→A 成环（Issue #7 审查备注）
 - [ ] **`loaded_plugins()` getter 保护**：无 GIL/互斥，跨线程读取有竞态风险（Issue #1 备注）
 - [ ] **`""` 根帧显示二义性**：TF 根帧以 `header.frame_id == ""` 发布时可能在树中重复显示（Issue #12 备注）
-- [ ] **迁移 Jazzy+ 时评估 `rosidl_dynamic_typesupport`**：届时可替代手写 introspection（dynmsg 继任者，Jazzy/Rolling 已发布）
+- [ ] **迁移 Jazzy+ 时评估 `rosidl_dynamic_typesupport`**：届时可替代手写 introspection（dynmsg 继任者，Jazzy/Rolling 已发布）--低优先级

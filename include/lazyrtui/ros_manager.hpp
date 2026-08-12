@@ -96,6 +96,8 @@ public:
 private:
   void spin_loop();
   void setup_tf_subscribers();
+  void execute_service_call(const std::string& service_name, const std::string& type_str,
+                            const std::string& request_json, ServiceCallback callback);
   std::string serialize_msg_to_json(/* generic msg */) const;
 
   std::string node_name_;

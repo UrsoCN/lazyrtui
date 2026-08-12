@@ -11,6 +11,8 @@
 #include <memory>
 #include <map>
 #include <mutex>
+#include <queue>
+#include <condition_variable>
 #include <dlfcn.h>
 #include <cmath>
 #include <rosidl_typesupport_introspection_cpp/message_introspection.hpp>
@@ -34,12 +36,61 @@ using namespace std::chrono_literals;
 
 namespace lazyrtui {
 
+// Forward declaration: defined near the typesupport-cache section below.
+static void cleanup_typesupport_caches();
+
 struct ROS2Manager::Impl {
     rclcpp::Node::SharedPtr node_;
     rclcpp::executors::SingleThreadedExecutor::SharedPtr executor_;
     std::map<std::string, std::shared_ptr<rclcpp::GenericSubscription>> subscriptions_;
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
+
+    // Managed worker for async service calls (Issue #5): no more per-call
+    // detached threads. The worker is created unconditionally so calls work
+    // even before a ROS connection exists; it is joined exactly once in
+    // stop() (and as a safety net in ~Impl).
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    std::queue<std::function<void()>> tasks_;
+    std::atomic<bool> worker_shutdown_{false};
+    std::thread worker_;
+
+    Impl() : worker_([this] { worker_loop(); }) {}
+
+    ~Impl() {
+        // Safety net: guarantee the worker is joined exactly once even if
+        // stop() never ran (e.g. constructor/start failure paths).
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            worker_shutdown_ = true;
+        }
+        queue_cv_.notify_all();
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    void worker_loop() {
+        while (true) {
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lock(queue_mutex_);
+                queue_cv_.wait(lock, [this] {
+                    return worker_shutdown_.load() || !tasks_.empty();
+                });
+                if (worker_shutdown_.load()) {
+                    return;  // Drop remaining tasks at shutdown.
+                }
+                task = std::move(tasks_.front());
+                tasks_.pop();
+            }
+            try {
+                task();
+            } catch (...) {
+            }
+        }
+    }
 };
 
 ROS2Manager::ROS2Manager(const std::string& node_name)
@@ -47,6 +98,7 @@ ROS2Manager::ROS2Manager(const std::string& node_name)
 
 ROS2Manager::~ROS2Manager() {
     stop();
+    cleanup_typesupport_caches();
 }
 
 bool ROS2Manager::start(int argc, char** argv) {
@@ -71,8 +123,18 @@ bool ROS2Manager::start(int argc, char** argv) {
 }
 
 void ROS2Manager::stop() {
-    if (!connected_) return;
+    // Signal the background worker first: in-flight service calls poll these
+    // flags and exit promptly. Idempotent — worker_ is joined exactly once.
     stop_requested_ = true;
+    {
+        std::lock_guard<std::mutex> lock(impl_->queue_mutex_);
+        impl_->worker_shutdown_ = true;
+    }
+    impl_->queue_cv_.notify_all();
+    if (impl_->worker_.joinable()) {
+        impl_->worker_.join();
+    }
+    if (!connected_) return;
     if (spin_thread_ && spin_thread_->joinable()) {
         spin_thread_->join();
     }
@@ -374,6 +436,22 @@ static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service
     g_service_typesupport_cache[type_str] = {handle, ts, members};
     if (out_ts) *out_ts = ts;
     return members;
+}
+
+// Closes all dynamically loaded typesupport libraries. Called from
+// ~ROS2Manager; idempotent and safe on repeated shutdown.
+static void cleanup_typesupport_caches() {
+    std::lock_guard<std::mutex> lock(g_typesupport_mutex);
+    for (auto& [type, info] : g_typesupport_cache) {
+        (void)type;
+        if (info.lib_handle) dlclose(info.lib_handle);
+    }
+    g_typesupport_cache.clear();
+    for (auto& [type, info] : g_service_typesupport_cache) {
+        (void)type;
+        if (info.lib_handle) dlclose(info.lib_handle);
+    }
+    g_service_typesupport_cache.clear();
 }
 
 // --- Introspection-driven message struct construction ----------------------
@@ -927,160 +1005,170 @@ bool ROS2Manager::is_topic_subscribed(const std::string& topic) const {
 
 void ROS2Manager::call_service_async(const std::string& service_name, const std::string& type_str,
                                      const std::string& request_json, ServiceCallback callback) {
-    std::thread([this, service_name, type_str, request_json, callback]() {
-        auto start_time = std::chrono::steady_clock::now();
-        auto elapsed_ms = [&start_time]() {
-            return std::chrono::duration<double, std::milli>(
-                       std::chrono::steady_clock::now() - start_time)
-                .count();
-        };
+    // Route the call onto the managed worker; no per-call detached threads.
+    std::lock_guard<std::mutex> lock(impl_->queue_mutex_);
+    impl_->tasks_.emplace([this, service_name, type_str, request_json, callback]() {
+        execute_service_call(service_name, type_str, request_json, callback);
+    });
+    impl_->queue_cv_.notify_one();
+}
 
-        // Node lifetime guard: the detached worker may outlive stop(); the
-        // managed task queue lands with Issue #5.
-        if (!rclcpp::ok() || stop_requested_.load()) {
-            callback(false, "ROS 2 is shutting down", elapsed_ms());
-            return;
+void ROS2Manager::execute_service_call(const std::string& service_name, const std::string& type_str,
+                                       const std::string& request_json, ServiceCallback callback) {
+    auto start_time = std::chrono::steady_clock::now();
+    auto elapsed_ms = [&start_time]() {
+        return std::chrono::duration<double, std::milli>(
+                   std::chrono::steady_clock::now() - start_time)
+            .count();
+    };
+
+    // Node lifetime guard: an in-flight call may overlap stop(). stop()
+    // sets the shutdown flags before joining the worker, so a running
+    // call observes them and exits its poll loops promptly.
+    if (!rclcpp::ok() || stop_requested_.load()) {
+        callback(false, "ROS 2 is shutting down", elapsed_ms());
+        return;
+    }
+
+    // Keep the node alive for the whole call: stop() resets impl_->node_
+    // after the worker is joined, but we still copy the shared_ptr so the
+    // rcl_node_t memory stays valid for the duration.
+    auto node = impl_->node_;
+    if (!node) {
+        callback(false, "ROS 2 is shutting down", elapsed_ms());
+        return;
+    }
+
+    const rosidl_service_type_support_t* ts = nullptr;
+    const auto* members = get_service_members(type_str, &ts);
+    if (!members || !ts) {
+        callback(false, "Failed to load service typesupport for '" + type_str + "'",
+                 elapsed_ms());
+        return;
+    }
+
+    nlohmann::json req;
+    try {
+        req = nlohmann::json::parse(request_json);
+    } catch (const std::exception& e) {
+        callback(false, std::string("Invalid request JSON: ") + e.what(), elapsed_ms());
+        return;
+    }
+    if (!req.is_object()) {
+        callback(false, "Request JSON must be an object", elapsed_ms());
+        return;
+    }
+
+    rcl_node_t* node_handle =
+        node->get_node_base_interface()->get_rcl_node_handle();
+
+    // RAII: rcl_client_fini needs the node handle and runs on every exit.
+    struct ClientRaii {
+        rcl_client_t client = rcl_get_zero_initialized_client();
+        rcl_node_t* node = nullptr;
+        bool initialized = false;
+        ~ClientRaii() {
+            if (initialized) rcl_client_fini(&client, node);
         }
+    } client_raii;
+    client_raii.node = node_handle;
 
-        // Keep the node alive for the whole worker: stop() resets
-        // impl_->node_ while this detached thread may still be running.
-        auto node = impl_->node_;
-        if (!node) {
-            callback(false, "ROS 2 is shutting down", elapsed_ms());
-            return;
-        }
+    rcl_client_options_t options = rcl_client_get_default_options();
+    rcl_ret_t ret = rcl_client_init(&client_raii.client, node_handle, ts,
+                                    service_name.c_str(), &options);
+    if (ret != RCL_RET_OK) {
+        callback(false, std::string("rcl_client_init failed: ") + rcl_get_error_string().str,
+                 elapsed_ms());
+        rcl_reset_error();
+        return;
+    }
+    client_raii.initialized = true;
 
-        const rosidl_service_type_support_t* ts = nullptr;
-        const auto* members = get_service_members(type_str, &ts);
-        if (!members || !ts) {
-            callback(false, "Failed to load service typesupport for '" + type_str + "'",
-                     elapsed_ms());
-            return;
-        }
+    // Wait for a server to become available (bounded; mirrors `ros2 service call`).
+    bool available = false;
+    auto avail_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (std::chrono::steady_clock::now() < avail_deadline && rclcpp::ok() &&
+           !stop_requested_.load()) {
+        if (rcl_service_server_is_available(node_handle, &client_raii.client,
+                                            &available) != RCL_RET_OK)
+            break;
+        if (available) break;
+        std::this_thread::sleep_for(50ms);
+    }
+    if (!available) {
+        callback(false, "Service '" + service_name + "' not available", elapsed_ms());
+        return;
+    }
 
-        nlohmann::json req;
-        try {
-            req = nlohmann::json::parse(request_json);
-        } catch (const std::exception& e) {
-            callback(false, std::string("Invalid request JSON: ") + e.what(), elapsed_ms());
-            return;
-        }
-        if (!req.is_object()) {
-            callback(false, "Request JSON must be an object", elapsed_ms());
-            return;
-        }
+    // Build the request message struct from JSON via introspection.
+    const auto* req_members = members->request_members_;
+    std::vector<uint8_t> req_storage(req_members->size_of_);
+    void* req_struct = req_storage.data();
+    req_members->init_function(req_struct,
+                               rosidl_runtime_cpp::MessageInitialization::ALL);
 
-        rcl_node_t* node_handle =
-            node->get_node_base_interface()->get_rcl_node_handle();
-
-        // RAII: rcl_client_fini needs the node handle and runs on every exit.
-        struct ClientRaii {
-            rcl_client_t client = rcl_get_zero_initialized_client();
-            rcl_node_t* node = nullptr;
-            bool initialized = false;
-            ~ClientRaii() {
-                if (initialized) rcl_client_fini(&client, node);
-            }
-        } client_raii;
-        client_raii.node = node_handle;
-
-        rcl_client_options_t options = rcl_client_get_default_options();
-        rcl_ret_t ret = rcl_client_init(&client_raii.client, node_handle, ts,
-                                        service_name.c_str(), &options);
-        if (ret != RCL_RET_OK) {
-            callback(false, std::string("rcl_client_init failed: ") + rcl_get_error_string().str,
-                     elapsed_ms());
-            rcl_reset_error();
-            return;
-        }
-        client_raii.initialized = true;
-
-        // Wait for a server to become available (bounded; mirrors `ros2 service call`).
-        bool available = false;
-        auto avail_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (std::chrono::steady_clock::now() < avail_deadline && rclcpp::ok() &&
-               !stop_requested_.load()) {
-            if (rcl_service_server_is_available(node_handle, &client_raii.client,
-                                                &available) != RCL_RET_OK)
-                break;
-            if (available) break;
-            std::this_thread::sleep_for(50ms);
-        }
-        if (!available) {
-            callback(false, "Service '" + service_name + "' not available", elapsed_ms());
-            return;
-        }
-
-        // Build the request message struct from JSON via introspection.
-        const auto* req_members = members->request_members_;
-        std::vector<uint8_t> req_storage(req_members->size_of_);
-        void* req_struct = req_storage.data();
-        req_members->init_function(req_struct,
-                                   rosidl_runtime_cpp::MessageInitialization::ALL);
-
-        bool filled = false;
-        try {
-            filled = fill_struct_members(req_members, req_struct, req);
-        } catch (const std::exception&) {
-            filled = false;
-        }
-        if (!filled) {
-            req_members->fini_function(req_struct);
-            callback(false, "Failed to build request (missing or invalid fields)", elapsed_ms());
-            return;
-        }
-
-        int64_t sequence_number = 0;
-        ret = rcl_send_request(&client_raii.client, req_struct, &sequence_number);
-        // Serialization is synchronous; the request struct can be destroyed now.
+    bool filled = false;
+    try {
+        filled = fill_struct_members(req_members, req_struct, req);
+    } catch (const std::exception&) {
+        filled = false;
+    }
+    if (!filled) {
         req_members->fini_function(req_struct);
-        if (ret != RCL_RET_OK) {
-            callback(false, std::string("rcl_send_request failed: ") + rcl_get_error_string().str,
-                     elapsed_ms());
+        callback(false, "Failed to build request (missing or invalid fields)", elapsed_ms());
+        return;
+    }
+
+    int64_t sequence_number = 0;
+    ret = rcl_send_request(&client_raii.client, req_struct, &sequence_number);
+    // Serialization is synchronous; the request struct can be destroyed now.
+    req_members->fini_function(req_struct);
+    if (ret != RCL_RET_OK) {
+        callback(false, std::string("rcl_send_request failed: ") + rcl_get_error_string().str,
+                 elapsed_ms());
+        rcl_reset_error();
+        return;
+    }
+
+    // Take the response struct (poll, bounded 10 s).
+    const auto* resp_members = members->response_members_;
+    std::vector<uint8_t> resp_storage(resp_members->size_of_);
+    void* resp_struct = resp_storage.data();
+    resp_members->init_function(resp_struct,
+                                rosidl_runtime_cpp::MessageInitialization::ALL);
+
+    const auto resp_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    bool got_response = false;
+    std::string take_error;
+    while (std::chrono::steady_clock::now() < resp_deadline && rclcpp::ok() &&
+           !stop_requested_.load()) {
+        rmw_request_id_t resp_id;
+        rcl_ret_t tr = rcl_take_response(&client_raii.client, &resp_id, resp_struct);
+        if (tr == RCL_RET_OK) {
+            got_response = true;
+            break;
+        }
+        if (tr != RCL_RET_CLIENT_TAKE_FAILED) {
+            take_error = std::string("rcl_take_response failed: ") + rcl_get_error_string().str;
             rcl_reset_error();
-            return;
+            break;
         }
+        std::this_thread::sleep_for(25ms);
+    }
 
-        // Take the response struct (poll, bounded 10 s).
-        const auto* resp_members = members->response_members_;
-        std::vector<uint8_t> resp_storage(resp_members->size_of_);
-        void* resp_struct = resp_storage.data();
-        resp_members->init_function(resp_struct,
-                                    rosidl_runtime_cpp::MessageInitialization::ALL);
-
-        const auto resp_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        bool got_response = false;
-        std::string take_error;
-        while (std::chrono::steady_clock::now() < resp_deadline && rclcpp::ok() &&
-               !stop_requested_.load()) {
-            rmw_request_id_t resp_id;
-            rcl_ret_t tr = rcl_take_response(&client_raii.client, &resp_id, resp_struct);
-            if (tr == RCL_RET_OK) {
-                got_response = true;
-                break;
-            }
-            if (tr != RCL_RET_CLIENT_TAKE_FAILED) {
-                take_error = std::string("rcl_take_response failed: ") + rcl_get_error_string().str;
-                rcl_reset_error();
-                break;
-            }
-            std::this_thread::sleep_for(25ms);
-        }
-
-        if (!got_response) {
-            resp_members->fini_function(resp_struct);
-            callback(false,
-                     take_error.empty() ? "Service call timed out after 10s" : take_error,
-                     elapsed_ms());
-            return;
-        }
-
-        // Read the response struct directly into JSON text.
-        std::stringstream ss;
-        read_struct_members(resp_members, resp_struct, ss, 0);
+    if (!got_response) {
         resp_members->fini_function(resp_struct);
-        callback(true, ss.str(), elapsed_ms());
-    }).detach();
+        callback(false,
+                 take_error.empty() ? "Service call timed out after 10s" : take_error,
+                 elapsed_ms());
+        return;
+    }
+
+    // Read the response struct directly into JSON text.
+    std::stringstream ss;
+    read_struct_members(resp_members, resp_struct, ss, 0);
+    resp_members->fini_function(resp_struct);
+    callback(true, ss.str(), elapsed_ms());
 }
 
 std::map<std::string, std::vector<std::string>> ROS2Manager::get_interfaces_tree() {

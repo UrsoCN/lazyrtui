@@ -227,6 +227,31 @@ TEST(AppTest, EscKeyHierarchicalBackNavigation) {
   EXPECT_TRUE(exited);
 }
 
+TEST(AppTest, ExitDialogPersistsAcrossCustomRedrawEvents) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  bool exited = false;
+  auto comp = app.build_main_component([&exited]() { exited = true; });
+
+  // Move to Top Bar and open Exit Dialog
+  comp->OnEvent(ftxui::Event::Escape);
+  comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_TRUE(app.show_exit_dialog());
+
+  // Simulate high-frequency background redraws (Event::Custom)
+  for (int i = 0; i < 200; ++i) {
+    comp->OnEvent(ftxui::Event::Custom);
+  }
+
+  // Dialog must NOT be dismissed by background redraw events
+  EXPECT_TRUE(app.show_exit_dialog());
+  EXPECT_FALSE(exited);
+
+  // User presses 'y' to confirm exit
+  comp->OnEvent(ftxui::Event::Character('y'));
+  EXPECT_TRUE(exited);
+}
+
 TEST(AppTest, TabNavigationBetweenInputAndButton) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);

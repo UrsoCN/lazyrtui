@@ -1032,6 +1032,12 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
   });
 
   return CatchEvent(renderer, [this, exit_fn](Event e) {
+    // Background redraw triggers (e.g. topic callbacks or refresh timer)
+    // must not be treated as user input or dismiss dialogs.
+    if (e == Event::Custom) {
+      return false;
+    }
+
     // Match a configured single-character keybinding. Empty bindings (and
     // non-character events) never match, so a disabled binding cannot fire.
     auto key_is = [&e](const std::string& binding) {

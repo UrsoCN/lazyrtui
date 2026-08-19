@@ -583,6 +583,7 @@ Component LazyRTUIApp::make_services_tab() {
   srv_input_opt.multiline = false;
   srv_input_opt.on_enter = [this]() { call_selected_service(); };
   service_input_ = Input(&service_request_json_, "{}", srv_input_opt);
+  register_text_input(service_input_);
   auto call_btn = Button("Call Service", [this]() { call_selected_service(); });
 
   auto right_container = Container::Vertical({service_input_, call_btn});
@@ -652,6 +653,7 @@ Component LazyRTUIApp::make_actions_tab() {
   act_input_opt.multiline = false;
   act_input_opt.on_enter = [this]() { send_selected_goal(); };
   action_input_ = Input(&action_goal_json_, "{}", act_input_opt);
+  register_text_input(action_input_);
   auto goal_btn = Button("Send Goal", [this]() { send_selected_goal(); });
 
   auto right_container = Container::Vertical({action_input_, goal_btn});
@@ -851,15 +853,20 @@ Component LazyRTUIApp::make_about_tab() {
                   });
 }
 
+void LazyRTUIApp::register_text_input(Component input) {
+  text_inputs_.push_back(std::move(input));
+}
+
 bool LazyRTUIApp::is_text_input_focused() const {
-  if (service_input_ && service_input_->Focused())
-    return true;
-  if (action_input_ && action_input_->Focused())
-    return true;
+  for (const auto &input : text_inputs_) {
+    if (input && input->Focused())
+      return true;
+  }
   return false;
 }
 
 Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
+  text_inputs_.clear();
   auto tab_toggle = Toggle(&tab_names_, &selected_tab_);
 
   auto tab_container =

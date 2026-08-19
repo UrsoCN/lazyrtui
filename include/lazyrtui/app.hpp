@@ -177,6 +177,10 @@ private:
   std::string action_response_;
   ftxui::Component action_input_;
 
+  // Registered text input widgets for generic focus detection
+  std::vector<ftxui::Component> text_inputs_;
+  void register_text_input(ftxui::Component input);
+
   // Interfaces tab state
   int selected_interface_pkg_ = 0;
   int selected_interface_item_ = 0;

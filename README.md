@@ -9,15 +9,15 @@
 ## Key Features
 
 - 🖥️ **Nodes Management**: Browse active ROS 2 nodes and inspect published/subscribed topics and service servers.
-- 📡 **Topics Inspector**: List active topics, view message types, monitor publication rates, and perform dynamic topic echoing.
-- ⚙️ **Services & Actions**: List available services and actions, inspect request/response schemas, and invoke them with JSON payloads.
-- 🎨 **IDL-Driven Python Plugins & ASCII Plotting**: Process ROS 2 message IDLs via Python plugins and render real-time terminal charts and widgets via `FTXUIConverter`.
+- 📡 **Topics Inspector**: List active topics, view message types, monitor publication rates, and perform dynamic topic echoing with CJK-aware auto-wrapping subtitles.
+- ⚙️ **Services & Actions**: List available services and actions, inspect request/response schemas, edit multi-line JSON payloads with `Alt+Enter`, and invoke them with native C++ clients.
+- 🎨 **Categorized Python Plugins & ASCII Plotting**: Process ROS 2 message IDLs via recursively discovered Python plugins (`speech/`, `teleop/`, `diagnostics/`, etc.) and render real-time terminal charts and widgets via `FTXUIConverter`.
 - ⚡ **60 FPS Lock-Free Rendering**: Uses immutable snapshot double-buffering (`UiSnapshot`) so UI rendering never blocks on ROS graph queries or data locks.
 - 🛡️ **Zero `~/.ros/log` Spam**: Maintains a single persistent ROS 2 node (`lazy_rtui_node`) and native C++ clients without spawning temporary shell subshells.
 - 🌲 **TF Tree Visualizer**: Inspect coordinate frames, view frame parent-child hierarchies, and check translation/rotation quaternions.
 - 📦 **Rosbag Helper**: Quick commands and status overview for recording and playing ROS 2 bags.
 - 📋 **Interfaces Explorer**: Browse ROS 2 message, service, and action definitions organized by package.
-- ⌨️ **Keyboard-First & Vim Navigation**: Fast navigation with `1-8`, `j/k`, `w`, `r`, `e`, `c`, `g`, `?`, and `q`.
+- ⌨️ **Hierarchical Keyboard Navigation**: Fast navigation with `1-8`, `Tab`, `Arrows`, `Space/Enter`, and hierarchical `Esc` back-navigation with Top Bar exit confirmation modal.
 
 ---
 
@@ -91,9 +91,10 @@ One test target per module under `test/`:
 |---|---|
 | `test_tf_tree` | TF frame tree — re-parenting, cycles, snapshots |
 | `test_config_loader` | YAML config parsing & fallback chain |
-| `test_ftxui_converter` | JSON UI spec → FTXUI rendering |
+| `test_ftxui_converter` | JSON UI spec → FTXUI rendering (including CJK paragraph auto-wrap) |
 | `test_cdr_utils` | CDR byte-swap / endianness utilities |
-| `test_python_plugin_engine` | Python plugin engine (embeds CPython) |
+| `test_python_plugin_engine` | Python plugin engine (recursive subdirectories, GIL safety) |
+| `test_app` | TUI event handling, input mode hotkey suppression, hierarchical Esc & exit dialog |
 
 Run all tests (standalone CMake build):
 ```bash
@@ -114,17 +115,17 @@ Tests are deterministic and hermetic (no reliance on host env, `HOME`, or `CWD`)
 
 ## Keybindings
 
-| Key | Action |
-| :---: | :--- |
-| `1` - `8` | Switch Tabs (Nodes, Topics, Services, Actions, Interfaces, Bags, TF, About) |
-| `w` | Toggle pane focus (Left / Right Pane) |
-| `j` / `k` | Navigate lists (Vim style) |
-| `r` | Refresh ROS 2 graph data |
-| `e` | Toggle topic echo (Topics tab) |
-| `c` | Call selected service (Services tab) |
-| `g` | Send goal to selected action (Actions tab) |
-| `?` | Toggle help modal |
-| `q` | Quit LazyRTUI |
+| Key | Action | Scope |
+| :---: | :--- | :--- |
+| `1` - `8` | Direct switch to Tab (Nodes, Topics, Services, Actions, Interfaces, Bags, TF, About) | Global |
+| `Tab` | Toggle focus between menu list, inputs, and action buttons | Current Tab |
+| `Up` / `Down` | Navigate list items; pressing `Up` at top navigates to Top Bar; `Down` in Top Bar enters content | Focused Pane |
+| `Left` / `Right` | Move horizontally or switch tabs when Top Bar is focused | Focused Pane |
+| `Space` / `Enter` | Toggle topic echo (Topics tab) or trigger button click | Active Control |
+| `Alt+Enter` / `Ctrl+Enter` | Insert a newline character in JSON input fields | Input Mode |
+| `Esc` | **Hierarchical back**:<br>1. In Input -> Return focus to left menu list<br>2. In Left Menu -> Return focus to Top Bar<br>3. In Top Bar -> Open Exit Confirmation Modal | Global |
+| `y` / `Y` | Confirm and exit application when Exit Modal is open (any other key cancels) | Exit Modal |
+| Configurable Keys | Custom single-key bindings (e.g. `refresh`, `quit`, `help`) can be set in YAML config | Global |
 
 ---
 

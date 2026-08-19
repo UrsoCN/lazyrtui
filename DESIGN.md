@@ -145,28 +145,29 @@ struct UiSnapshot {
 
 ```
 +-------------------------------------------------------------------------------+
-|  **LazyRTUI v0.1.0**  [1:Nodes] [2:Topics] [3:Services] ... [8:About]  (● ROS) |  <-- Header
+|  **LazyRTUI v0.2.x**  [1:Nodes] [2:Topics] [3:Services] ... [8:About]  (● ROS) |  <-- Header
 +-------------------------------------------------------------------------------+
 | Left Pane (Menu/Tree)               | Right Pane (Detail / Monitor / Chart)   |
 | (Width: Fixed/Proportional)         | (Flex: 1)                               |
 |                                     |                                         |
 | [Focused: Highlighted Border]       | [Unfocused: Dim/Light Border]           |
 +-------------------------------------------------------------------------------+
-| 1-8:Tab  w:Focus  j/k:Nav  r:Refresh  e:Echo  c:Call  g:Goal  ?:Help  q:Quit   |  <-- Footer
+| 1-8:Tab  Tab:Focus  Arrows:Navigate  Space/Enter:Action  Esc:Back/Quit        |  <-- Footer
 +-------------------------------------------------------------------------------+
 ```
 
-#### 全局按键映射 (Keybindings Specification)
+#### 全局按键与交互映射规范 (Keybindings Specification)
 | 按键 | 功能说明 | 作用范围 |
 | :---: | :--- | :--- |
-| `1` ~ `8` | 快速直接切换至对应的 Tab 页 | 全局 |
-| `Tab` | 在左侧列表菜单与右侧面板/控件之间切换焦点 | 全局 |
-| `j` / `Down` | Vim 式向下移动菜单/列表选中项 | 当前聚焦面板 |
-| `k` / `Up` | Vim 式向上移动菜单/列表选中项（列表顶端按 Up 可进入 Top Bar） | 当前聚焦面板 |
-| `Space` / `Enter` | 切换当前选中 Topic 的 Echo 监听 / 取消监听状态（或点击按钮） | Topic Tab / 操作区 |
-| `?` | 打开 / 关闭全局快捷键与帮助说明浮层 (Help Modal) | 全局 |
-| `Esc` | 层级式逐级返回：输入框 -> 左侧菜单列表 -> 顶部 Top Bar；或关闭 Help Modal 弹窗 | 全局 |
-| `q` | 安全退出 LazyRTUI 应用程序 | 全局 |
+| `1` ~ `8` | 快速直接切换至对应的 Tab 页（自动将焦点置于当前 Tab 容器） | 全局 |
+| `Tab` | 在左侧列表菜单与右侧面板/控件之间轮转切换焦点 | 当前选项卡 |
+| `Up` / `Down` | 上下移动菜单/列表选中项（列表顶端按 Up 可导航至顶部 Top Bar，Top Bar 按 Down 重新进入面板） | 当前聚焦区 |
+| `Left` / `Right` | 左右移动或在 Top Bar 中快速切换前后选项卡 | 当前聚焦区 |
+| `Space` / `Enter` | 切换当前选中 Topic 的 Echo 监听状态，或点击操作按钮（如 Service Call、Action Send Goal） | 当前聚焦控件 |
+| `Alt+Enter` / `Ctrl+Enter` | 在多行 JSON 输入框中插入换行符 | 输入编辑区 |
+| `Esc` | **层级式逐级返回**：<br>1. 输入框中按 Esc -> 退出输入状态并将焦点归位到左侧列表<br>2. 左侧列表中按 Esc -> 焦点回退至顶部 Top Bar<br>3. Top Bar 中按 Esc -> 弹出退出确认对话框 (Exit Confirmation Modal) | 全局 |
+| `y` / `Y` | 当退出确认弹窗激活时，确认退出应用程序（按其他任意按键取消并关闭弹窗） | 退出弹窗 |
+| 自定义快捷键 | 支持在 YAML 配置文件中自定义覆盖绑定（如 `refresh`, `quit`, `help` 等） | 全局 |
 
 #### 8 个 Tab 页详细规格
 
@@ -289,7 +290,9 @@ Python 插件 `render()` 函数返回的 JSON UI Spec 遵循如下 Schema 协议
 }
 ```
 
-`FTXUIConverter` 递归解析该 JSON，映射为 FTXUI `vbox` / `hbox` / `text` / `border` 以及 `ftxui::Canvas` 像素点图表。
+`FTXUIConverter` 递归解析该 JSON，映射为 FTXUI `vbox` / `hbox` / `text` / `paragraph` / `gauge` / `separator` 以及 `ftxui::Canvas` 像素点图表。
+
+- **`paragraph` 多语言折行控件**：支持针对中英文混合排版的智能折行（纯 ASCII 采用 `ftxui::paragraph` 单词折行；包含 CJK 字符时采用 `ftxui::flexbox(gap=0)` 按汉字/全角字符级别折行），彻底解决长语音字幕和长日志文本溢出终端边框的问题。
 
 ---
 
@@ -303,16 +306,14 @@ Python 插件 `render()` 函数返回的 JSON UI Spec 遵循如下 Schema 协议
 #### 配置文件格式规范
 ```yaml
 keybindings:
-  help: "?"
-  quit: "q"
-  # 可选自定义覆盖：
+  # 可选自定义覆盖默认按键：
+  # help: "?"
+  # quit: "q"
   # switch_focus: "w"
   # refresh: "r"
   # echo_topic: "e"
   # call_service: "c"
   # send_goal: "g"
-
-> **输入模式快捷键隔离与换行机制**：当光标处于 JSON 请求体或 Goal 输入框 (`Input`) 中时，全局快捷键（如 `1-8`, `q` 等）临时屏蔽，确保字符能够正常录入；按 `Alt+Enter`（或 `Ctrl+Enter`）可在光标处插入换行以支持多行 JSON 结构编辑；按 `Enter` 直接触发 Service Call / Action Send Goal 快捷提交；按 `Esc` 支持层级式逐级返回（输入框 -> 左侧菜单列表 -> 顶部 Top Bar）。按 `Tab` 可在不同控件和面板间切换焦点。
 
 ui:
   auto_refresh_interval_ms: 2000
@@ -328,6 +329,8 @@ services:
       x: 2.0
       y: 2.0
 ```
+
+> **输入模式快捷键隔离与换行机制**：当光标处于 JSON 请求体或 Goal 输入框 (`Input`) 中时，全局快捷键临时屏蔽，确保字符能够正常录入；按 `Alt+Enter`（或 `Ctrl+Enter`）可在光标处插入换行以支持多行 JSON 结构编辑；按 `Enter` 直接触发 Service Call / Action Send Goal 快捷提交；按 `Esc` 支持层级式逐级返回（输入框 -> 左侧菜单列表 -> 顶部 Top Bar）。按 `Tab` 可在不同控件和面板间切换焦点。
 
 ---
 
@@ -376,11 +379,13 @@ colcon test --packages-select lazyrtui
 2. **内存与资源安全**：
    - 避免使用裸指针（Raw Pointers），优先使用 `std::unique_ptr` 与 `std::shared_ptr`。
    - 所有动态加载的句柄（`dlopen` / Python C API 对象）必须具备严格的 RAII 或显式 cleanup 释放机制。
-3. **单元测试与 GTest 集成**：
-   - `test/tf_tree_test.cpp`：覆盖坐标变换树父子关系与重亲和更新。
-   - `test/config_loader_test.cpp`：覆盖 YAML 配置解析与默认值回退。
-   - `test/ftxui_converter_test.cpp`：覆盖 JSON UI Spec 到 FTXUI 控件的转换。
-   - `test/cdr_utils_test.cpp`：覆盖 CDR 字节序与序列化反序列化转换。
+3. **单元测试与 GTest 集成 (6 大测试套件)**：
+   - `test/tf_tree_test.cpp` (`test_tf_tree`)：覆盖坐标变换树父子关系与重亲和更新。
+   - `test/config_loader_test.cpp` (`test_config_loader`)：覆盖 YAML 配置解析与默认值回退。
+   - `test/ftxui_converter_test.cpp` (`test_ftxui_converter`)：覆盖 JSON UI Spec 到 FTXUI 控件的转换（包括 CJK paragraph 自动换行）。
+   - `test/cdr_utils_test.cpp` (`test_cdr_utils`)：覆盖 CDR 字节序检测与序列化反序列化转换。
+   - `test/python_plugin_engine_test.cpp` (`test_python_plugin_engine`)：覆盖嵌入式 Python 插件引擎生命周期、GIL 隔离与子目录递归发现。
+   - `test/app_test.cpp` (`test_app`)：覆盖 TUI 视图交互、输入模式快捷键隔离、Esc 逐级退出与确认弹窗。
 
 ---
 

@@ -18,10 +18,16 @@
 | 7 | TF 重亲和后旧父节点残留子帧 | P1 | `src/tf_tree.cpp` | `update_transform` 重亲和时先擦除旧父节点 `children` 中的子帧（含空 parent_id/父帧缺失守卫） | ✅ `6d97260` |
 | 6 | Service/Action/Interface/TF 选项卡 mock 数据 | P1 | `src/app.cpp`, `app.hpp` | 全部接入真实 ROS 2：service 调用（模板预填+异步回调）、action 发目标（复用动态客户端经 send_goal 服务）、interface 树/详情（三栏）、TF 实时树（`TFTree::snapshot()` 深拷贝渲染） | ✅ `06c3003` + `d435c42` |
 | 9 | 事件循环硬编码按键 | P2 | `src/app.cpp`, `config_loader.hpp` | 按键改读 `config_.keybindings`（`key_is` 匹配，空绑定禁用）；帮助/底部栏/About 显示实际绑定；修复 3-pane 焦点切换；清除 'c'/'g' 残留 mock | ✅ `005a017` + `e3a538c` |
-| 10 | CDR 解析假设主机字节序 | P2 | `src/ros_manager.cpp`, `src/cdr_utils.hpp` | 校验 4 字节封装头 byte0（`0x01` LE / `0x00` BE），流序与主机不一致时逐字段字节交换（含有界序列 wire 计数修复） | ✅ `2a82aec` + `ff84148` |
-| 新增 | 无自动化测试 | P2 | `CMakeLists.txt`, `test/` | 4 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils），13 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` |
+| 10 | CDR 解析假设主机字节序 | P2 | `src/ros_manager.cpp`, `src/cdr_utils.hpp` | 校验 4 字节封装头 byte1 endian 标志，流序与主机不一致时逐字段字节交换，修正有效负载 4 字节对齐 | ✅ `2a82aec` + `67cb9e1` |
+| 11 | JSON 输入框多行换行支持 | P2 | `src/app.cpp` | 拦截 `Alt+Enter` / `Ctrl+Enter` 并在光标位置插入换行符 `\n`，`Enter` 保留用于直接提交 | ✅ `2b05009` |
+| 12 | Action 类型符号规范化 | P2 | `src/ros_manager.cpp` | 规范化 action 类型名称解析，解决 `_SendGoal_Goal` typesupport 加载失败问题 | ✅ `88d2d1c` |
+| 13 | 快捷键精简与层级式导航 | P2 | `src/app.cpp`, `config_loader.hpp` | 移除 `w/r/e/c/g/j/k/q/?` 默认单字符快捷键；支持 Top Bar 与内容区垂直上下导航；支持 Esc 逐级回退及 Top Bar 退出确认弹窗 | ✅ `41a1f67` + `8cb38be` + `e1a261b` + `ef89ba1` |
+| 14 | CatchEvent 隔离 Event::Custom 重绘 | P1 | `src/app.cpp` | 在 `CatchEvent` 最顶端放行 `Event::Custom`，防止高频 Topic 刷新意外关闭退出弹窗 | ✅ `3b17cb8` |
+| 15 | FTXUIConverter paragraph CJK 自动换行 | P1 | `src/ftxui_converter.cpp` | 基于 flexbox(gap=0) 实现 CJK/全角汉字级别换行与 ASCII 单词边界换行，解决长语音字幕溢出 | ✅ `cc1a00d` |
+| 16 | 插件分类目录体系与递归发现 | P2 | `src/python_plugin_engine.cpp` | `load_plugins_from_dir` 升级为 `recursive_directory_iterator`；建立 `speech/`、`teleop/`、`diagnostics/` 分类目录及 PEP 257 规范 | ✅ `833eaed` |
+| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），23 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` |
 
-**验证基线**：`make -C build lazyrtui` 零警告；`ctest` 4/4 目标通过；工作树干净；每 commit 均经独立审查（`fix-review:` 承载整改）。
+**验证基线**：`make -C build lazyrtui` 零警告；`ctest` 6/6 目标（23 用例）通过；工作树干净；每 commit 均经独立审查（`fix-review:` 承载整改）。
 
 ---
 

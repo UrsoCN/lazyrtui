@@ -86,7 +86,8 @@ To run a single test target: `./build/<target>` (e.g. `./build/test_python_plugi
   - PIMPL pattern (`ROS2Manager::Impl`). Manages single persistent ROS 2 node (`lazy_rtui_node`), graph querying, dynamic subscriptions via CDR deserialization, and native C++ service/action clients without spawning shell subshells.
 - **Plugin & Converter Engine (`PythonPluginEngine` & `FTXUIConverter`)**:
   - Files: [`src/python_plugin_engine.cpp`](file:///home/u/source/open_source/lazyrtui/src/python_plugin_engine.cpp), [`src/ftxui_converter.cpp`](file:///home/u/source/open_source/lazyrtui/src/ftxui_converter.cpp)
-  - Executes Python message render scripts under GIL protection (`PyGILState_Ensure`/`Release`), converts output JSON UI specs to FTXUI `Element`/`Canvas` widgets.
+  - `PythonPluginEngine`: Recursively scans plugin subdirectories (`speech/`, `teleop/`, `diagnostics/`, etc.), executes Python message render scripts under GIL protection (`PyGILState_Ensure`/`Release`).
+  - `FTXUIConverter`: Converts output JSON UI specs to FTXUI `Element`/`Canvas` widgets, including `paragraph` with CJK-aware auto-wrapping (using flexbox gap-0 for Chinese and words for ASCII).
 - **Config Loader (`ConfigLoader`)**:
   - Files: [`src/config_loader.cpp`](file:///home/u/source/open_source/lazyrtui/src/config_loader.cpp), [`include/lazyrtui/config_loader.hpp`](file:///home/u/source/open_source/lazyrtui/include/lazyrtui/config_loader.hpp)
   - Parses YAML configuration files using `yaml-cpp`.
@@ -118,10 +119,10 @@ Development follows a **test-first** discipline: every functional change (featur
 |---|---|
 | `test_tf_tree` | `src/tf_tree.cpp` — frame tree semantics |
 | `test_config_loader` | `src/config_loader.cpp` — YAML parsing & fallback chain |
-| `test_ftxui_converter` | `src/ftxui_converter.cpp` — JSON UI spec → FTXUI rendering |
+| `test_ftxui_converter` | `src/ftxui_converter.cpp` — JSON UI spec → FTXUI rendering (including CJK paragraph auto-wrap) |
 | `test_cdr_utils` | `src/cdr_utils.hpp` — CDR byte-swap/endianness |
-| `test_python_plugin_engine` | `src/python_plugin_engine.cpp` — Python plugin engine (embeds CPython) |
-| `test_app` | `src/app.cpp` — UI event handling, input focus & hotkey suppression |
+| `test_python_plugin_engine` | `src/python_plugin_engine.cpp` — Python plugin engine (recursive subdirectories, GIL safety) |
+| `test_app` | `src/app.cpp` — UI event handling, input focus, hierarchical Esc & exit dialog |
 
 New modules MUST get a matching test target in the same commit as the feature.
 
@@ -152,5 +153,5 @@ Module-specific deps: `yaml-cpp` (config), `ftxui::dom ftxui::screen` + `nlohman
 
 ### Verification
 - Before committing any change: build with `cmake --build build -j"$(nproc)"` and run `ctest --test-dir build --output-on-failure` (all targets must pass).
-- Run the full suite, not just the changed target, when the change could affect shared code — e.g. `cdr_utils.hpp` is included by `src/ros_manager.cpp` (the main app) as well as `test_cdr_utils`, and `python_plugin_engine.cpp` exercises CPython state that persists across tests. The suite is 5 cheap targets (<1s); running all of it after any change costs little and catches cross-target interference.
+- Run the full suite, not just the changed target, when the change could affect shared code — e.g. `cdr_utils.hpp` is included by `src/ros_manager.cpp` (the main app) as well as `test_cdr_utils`, and `python_plugin_engine.cpp` exercises CPython state that persists across tests. The suite is 6 cheap targets (<3s); running all of it after any change costs little and catches cross-target interference.
 

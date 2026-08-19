@@ -22,13 +22,13 @@ struct UIConfig {
 struct Keybindings {
   std::string switch_focus = "";
   std::string refresh = "";
-  std::string search = "/";
+  std::string search = "";
   std::string echo_topic = "";
   std::string plot_topic = "";
   std::string call_service = "";
   std::string send_goal = "";
-  std::string help = "?";
-  std::string quit = "q";
+  std::string help = "";
+  std::string quit = "";
 };
 
 struct Config {

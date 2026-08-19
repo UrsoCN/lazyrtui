@@ -37,9 +37,18 @@ TEST(AppTest, GlobalHotkeysWorkOutsideInputMode) {
   comp->OnEvent(ftxui::Event::Character('1'));
   EXPECT_EQ(app.selected_tab(), 0);
 
-  // 'q' triggers exit callback.
+  // Esc moves from left list to Top Bar
+  comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_EQ(app.main_vertical_focus(), 0);
+  EXPECT_FALSE(app.show_exit_dialog());
+
+  // Esc in Top Bar opens Exit confirmation dialog
+  comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_TRUE(app.show_exit_dialog());
   EXPECT_FALSE(exited);
-  comp->OnEvent(ftxui::Event::Character('q'));
+
+  // 'y' confirms exit
+  comp->OnEvent(ftxui::Event::Character('y'));
   EXPECT_TRUE(exited);
 }
 
@@ -117,6 +126,7 @@ TEST(AppTest, SuppressesHotkeysAndTypesInActionInput) {
 
 TEST(AppTest, HelpModalCapturesAndDismissesEvents) {
   Config cfg;
+  cfg.keybindings.help = "?";
   LazyRTUIApp app(nullptr, cfg);
   auto comp = app.build_main_component();
 
@@ -124,6 +134,7 @@ TEST(AppTest, HelpModalCapturesAndDismissesEvents) {
 
   // '?' opens help modal
   comp->OnEvent(ftxui::Event::Character('?'));
+  EXPECT_TRUE(app.show_help());
 
   // When help modal is open, '2' should NOT switch tab
   comp->OnEvent(ftxui::Event::Character('2'));
@@ -131,6 +142,7 @@ TEST(AppTest, HelpModalCapturesAndDismissesEvents) {
 
   // 'Escape' closes help modal
   comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_FALSE(app.show_help());
 
   // Now '2' switches tab
   comp->OnEvent(ftxui::Event::Character('2'));
@@ -167,7 +179,8 @@ TEST(AppTest, VerticalNavigationBetweenTopBarAndContent) {
 TEST(AppTest, EscKeyHierarchicalBackNavigation) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);
-  auto comp = app.build_main_component();
+  bool exited = false;
+  auto comp = app.build_main_component([&exited]() { exited = true; });
 
   // 1. Switch to Services tab (2)
   comp->OnEvent(ftxui::Event::Character('3'));
@@ -189,11 +202,29 @@ TEST(AppTest, EscKeyHierarchicalBackNavigation) {
   // 4. Second Esc: Exits left menu to Top Bar
   comp->OnEvent(ftxui::Event::Escape);
   EXPECT_EQ(app.main_vertical_focus(), 0);
+  EXPECT_FALSE(app.show_exit_dialog());
 
-  // 5. In Top Bar, ArrowDown returns to tab content
+  // 5. Third Esc: Opens Exit confirmation dialog
+  comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_TRUE(app.show_exit_dialog());
+
+  // 6. Pressing 'n' or any key cancels dialog
+  comp->OnEvent(ftxui::Event::Character('n'));
+  EXPECT_FALSE(app.show_exit_dialog());
+  EXPECT_FALSE(exited);
+  EXPECT_EQ(app.main_vertical_focus(), 0);
+
+  // 7. In Top Bar, ArrowDown returns to tab content
   comp->OnEvent(ftxui::Event::ArrowDown);
   EXPECT_EQ(app.main_vertical_focus(), 1);
   EXPECT_EQ(app.service_pane_focus(), 0);
+
+  // 8. Test confirming exit with 'Y'
+  comp->OnEvent(ftxui::Event::Escape);  // Back to Top Bar
+  comp->OnEvent(ftxui::Event::Escape);  // Open Exit Dialog
+  EXPECT_TRUE(app.show_exit_dialog());
+  comp->OnEvent(ftxui::Event::Character('Y'));
+  EXPECT_TRUE(exited);
 }
 
 TEST(AppTest, TabNavigationBetweenInputAndButton) {

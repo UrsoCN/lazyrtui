@@ -149,7 +149,8 @@ TEST_F(ConfigLoaderTest, EmptyConfigKeepsDefaults) {
   const std::string path = WriteConfig("");
   ConfigLoader loader(path);
   Config cfg = loader.load();
-  EXPECT_EQ(cfg.keybindings.quit, "q");
+  EXPECT_EQ(cfg.keybindings.quit, "");
+  EXPECT_EQ(cfg.keybindings.help, "");
   EXPECT_EQ(cfg.keybindings.switch_focus, "");
   EXPECT_EQ(cfg.keybindings.refresh, "");
   EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);
@@ -165,7 +166,8 @@ TEST_F(ConfigLoaderTest, MissingFileFallsBackToDefaults) {
   const std::string path = (dir_ / "does_not_exist.yaml").string();
   ConfigLoader loader(path);
   Config cfg = loader.load();  // Must not throw; prints a note to stderr.
-  EXPECT_EQ(cfg.keybindings.quit, "q");
+  EXPECT_EQ(cfg.keybindings.quit, "");
+  EXPECT_EQ(cfg.keybindings.help, "");
   EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);
   EXPECT_TRUE(cfg.topics.empty());
 }
@@ -174,7 +176,8 @@ TEST_F(ConfigLoaderTest, MalformedYamlFallsBackToDefaults) {
   const std::string path = WriteConfig("keybindings: [unclosed\n  bad: yaml::");
   ConfigLoader loader(path);
   Config cfg = loader.load();  // YAML::LoadFile exception caught -> defaults.
-  EXPECT_EQ(cfg.keybindings.quit, "q");
+  EXPECT_EQ(cfg.keybindings.quit, "");
+  EXPECT_EQ(cfg.keybindings.help, "");
   EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);
   EXPECT_TRUE(cfg.topics.empty());
 }

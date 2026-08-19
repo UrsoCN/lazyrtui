@@ -833,14 +833,14 @@ Component LazyRTUIApp::make_about_tab() {
         text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
         text("ROS 2 Distro: Unknown"),
         separator(),
-        text("Keybindings:"),
+        text("Navigation & Controls:"),
         text("  1-8: Switch tabs"),
-        text("  Tab: Toggle pane focus"),
-        text("  j/k: Navigate lists"),
-        text("  Space/Enter: Toggle echo"),
+        text("  Arrows: Up/Down/Left/Right navigation"),
+        text("  Tab: Toggle pane focus / Next field"),
+        text("  Space/Enter: Toggle topic echo / Click button"),
         text("  Enter: Submit in input mode"),
         text("  Alt+Enter: Newline in input mode"),
-        text("  Esc: Exit input / Cancel"),
+        text("  Esc: Back (Input -> List -> Top Bar -> Quit)"),
     };
     auto kb = [this](const std::string &key, const char *desc) {
       if (key.empty()) return Elements{};
@@ -936,7 +936,9 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
 
     // Footer (context-aware: switches to input mode hints when typing).
     std::string footer_text;
-    if (is_text_input_focused()) {
+    if (show_exit_dialog_) {
+      footer_text = " [Confirm Quit]  y/Y:Exit  Esc/Any key:Cancel ";
+    } else if (is_text_input_focused()) {
       footer_text =
           " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Alt+Enter:Newline  Tab:Next Field ";
     } else {
@@ -944,7 +946,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
         if (key.empty()) return std::string("");
         return std::string("  ") + key + ":" + label;
       };
-      footer_text = " 1-8:Tab  j/k:Navigate  Tab:Focus  Esc:TopBar";
+      footer_text = " 1-8:Tab  Tab:Focus  Esc:Back/Quit";
       footer_text += kb_f(config_.keybindings.switch_focus, "Focus");
       footer_text += kb_f(config_.keybindings.refresh, "Refresh");
       footer_text += kb_f(config_.keybindings.echo_topic, "Echo");
@@ -959,6 +961,27 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
     auto main_view = vbox({header, separator(), tab_container->Render() | flex,
                            separator(), footer});
 
+    if (show_exit_dialog_) {
+      auto exit_modal =
+          window(
+              text(" Confirm Quit ") | bold,
+              vbox({
+                  text(""),
+                  text("  Are you sure you want to quit LazyRTUI?  ") | bold,
+                  text(""),
+                  separator(),
+                  text(""),
+                  hbox({text("  Press "), text("y") | bold | color(Color::Green),
+                        text(" / "), text("Y") | bold | color(Color::Green),
+                        text(" to Exit, or "),
+                        text("Esc") | bold | color(Color::Yellow),
+                        text(" / any other key to Cancel  ")}),
+                  text(""),
+              })) |
+          clear_under | center;
+      return dbox({main_view, exit_modal});
+    }
+
     if (show_help_) {
       auto kb = [this](const std::string &key, const char *desc) {
         if (key.empty()) return Elements{};
@@ -972,12 +995,12 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
           text("Keybindings:"),
           separator(),
           text(" 1-8       : Switch Tab"),
+          text(" Arrows    : Up/Down/Left/Right navigate"),
           text(" Tab       : Toggle pane focus"),
-          text(" j/k       : Navigate lists (vim style)"),
           text(" Space/Ret : Toggle topic echo (Topics tab)"),
           text(" Enter     : Submit request/goal (Input mode)"),
           text(" Alt+Enter : Insert newline (Input mode)"),
-          text(" Esc       : Unfocus / Return to Top Bar / Exit modal"),
+          text(" Esc       : Back (Input -> List -> Top Bar -> Quit)"),
       };
       for (const auto &el :
            kb(config_.keybindings.switch_focus, "Toggle pane focus"))
@@ -1015,8 +1038,19 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
       return !binding.empty() && e.is_character() && e.character() == binding;
     };
 
+    if (show_exit_dialog_) {
+      if (e == Event::Character('y') || e == Event::Character('Y')) {
+        if (exit_fn) exit_fn();
+        else if (screen_) screen_->Exit();
+        return true;
+      }
+      // Any other key dismisses the exit dialog.
+      show_exit_dialog_ = false;
+      return true;
+    }
+
     if (show_help_) {
-      if (key_is(config_.keybindings.quit)) {
+      if (!config_.keybindings.quit.empty() && key_is(config_.keybindings.quit)) {
         if (exit_fn) exit_fn();
         else if (screen_) screen_->Exit();
         return true;
@@ -1053,22 +1087,16 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
       return false;
     }
 
-    if (key_is(config_.keybindings.quit)) {
-      if (exit_fn) exit_fn();
-      else if (screen_) screen_->Exit();
+    if (!config_.keybindings.quit.empty() && key_is(config_.keybindings.quit)) {
+      show_exit_dialog_ = true;
       return true;
     }
-    if (key_is(config_.keybindings.help)) {
+    if (!config_.keybindings.help.empty() && key_is(config_.keybindings.help)) {
       show_help_ = !show_help_;
       return true;
     }
 
     if (e == Event::Escape) {
-      if (show_help_) {
-        show_help_ = false;
-        return true;
-      }
-
       // If in a subpane, return focus to the left pane first.
       bool in_sub_pane = false;
       if (selected_tab_ == 0 && node_pane_focus_ != 0) {
@@ -1099,6 +1127,12 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
       // If already in the left menu, return focus to the Top Bar.
       if (main_vertical_focus_ == 1) {
         main_vertical_focus_ = 0;
+        return true;
+      }
+
+      // If already in the Top Bar, open the exit confirmation dialog.
+      if (main_vertical_focus_ == 0) {
+        show_exit_dialog_ = true;
         return true;
       }
 
@@ -1194,34 +1228,29 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
       return true;
     }
 
-    if (key_is(config_.keybindings.refresh)) {
+    if (!config_.keybindings.refresh.empty() &&
+        key_is(config_.keybindings.refresh)) {
       refresh_data();
       return true;
     }
 
     if (selected_tab_ == 1 &&
-        (key_is(config_.keybindings.echo_topic) || e == Event::Character(' ') ||
-         e == Event::Return)) {
+        ((!config_.keybindings.echo_topic.empty() &&
+          key_is(config_.keybindings.echo_topic)) ||
+         e == Event::Character(' ') || e == Event::Return)) {
       toggle_topic_subscription(selected_topic_);
       return true;
     }
 
-    if (key_is(config_.keybindings.call_service) && selected_tab_ == 2) {
+    if (!config_.keybindings.call_service.empty() &&
+        key_is(config_.keybindings.call_service) && selected_tab_ == 2) {
       call_selected_service();
       return true;
     }
 
-    if (key_is(config_.keybindings.send_goal) && selected_tab_ == 3) {
+    if (!config_.keybindings.send_goal.empty() &&
+        key_is(config_.keybindings.send_goal) && selected_tab_ == 3) {
       send_selected_goal();
-      return true;
-    }
-
-    if (e == Event::Character('j')) {
-      if (screen_) screen_->PostEvent(Event::ArrowDown);
-      return true;
-    }
-    if (e == Event::Character('k')) {
-      if (screen_) screen_->PostEvent(Event::ArrowUp);
       return true;
     }
 

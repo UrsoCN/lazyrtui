@@ -1,7 +1,7 @@
 keybindings:
-  help: "?"
-  quit: "q"
-  # Optional custom bindings:
+  # Optional custom overrides:
+  # help: "?"
+  # quit: "q"
   # switch_focus: "w"
   # refresh: "r"
   # echo_topic: "e"

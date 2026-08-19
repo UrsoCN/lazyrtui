@@ -81,6 +81,8 @@ public:
   int main_vertical_focus() const { return main_vertical_focus_; }
   int service_pane_focus() const { return service_pane_focus_; }
   int action_pane_focus() const { return action_pane_focus_; }
+  bool show_exit_dialog() const { return show_exit_dialog_; }
+  bool show_help() const { return show_help_; }
   const std::string &service_request_json() const {
     return service_request_json_;
   }
@@ -111,6 +113,7 @@ private:
   int main_vertical_focus_ = 1;  // 0 = Top Bar (tab_toggle), 1 = Tab Content (tab_container)
   std::vector<std::string> tab_names_;
   bool show_help_ = false;
+  bool show_exit_dialog_ = false;
 
   // Data refresh
   void refresh_data();

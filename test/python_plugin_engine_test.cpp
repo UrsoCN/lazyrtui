@@ -290,4 +290,41 @@ TEST_F(PythonPluginEngineTest, RenderMessageNonSerializableReturnIsCaught) {
             std::string::npos);
 }
 
+TEST_F(PythonPluginEngineTest, LoadPluginsFromNestedSubdirectories) {
+  namespace fs = std::filesystem;
+  fs::create_directories(dir_ / "speech");
+  fs::create_directories(dir_ / "teleop" / "nested");
+  fs::create_directories(dir_ / "__pycache__");
+
+  const std::string p1 = (dir_ / "speech" / "plugin_speech.py").string();
+  {
+    std::ofstream out(p1);
+    out << "def match(t, m):\n    return t == '/speech'\ndef render(msg, s):\n    return {'type': 'text', 'content': 'speech'}\n";
+  }
+
+  const std::string p2 = (dir_ / "teleop" / "nested" / "plugin_teleop.py").string();
+  {
+    std::ofstream out(p2);
+    out << "def match(t, m):\n    return t == '/cmd_vel'\ndef render(msg, s):\n    return {'type': 'text', 'content': 'teleop'}\n";
+  }
+
+  // File inside __pycache__ should be ignored
+  const std::string p_cache = (dir_ / "__pycache__" / "cached.py").string();
+  {
+    std::ofstream out(p_cache);
+    out << "def match(t, m):\n    return True\ndef render(msg, s):\n    return {}\n";
+  }
+
+  PythonPluginEngine engine;
+  engine.load_plugins_from_dir(dir_.string());
+
+  const auto &plugins = engine.loaded_plugins();
+  ASSERT_EQ(plugins.size(), 2u);
+
+  EXPECT_EQ(engine.find_matching_plugin("/speech", "std_msgs/msg/String"),
+            "plugin_speech");
+  EXPECT_EQ(engine.find_matching_plugin("/cmd_vel", "geometry_msgs/msg/Twist"),
+            "plugin_teleop");
+}
+
 }  // namespace lazyrtui

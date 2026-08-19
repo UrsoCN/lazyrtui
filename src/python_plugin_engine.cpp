@@ -83,7 +83,8 @@ std::string PythonPluginEngine::fetch_python_error() {
 
 void PythonPluginEngine::load_plugins_from_dir(const std::string &dir_path) {
   GilGuard guard;
-  if (!fs::exists(dir_path) || !fs::is_directory(dir_path))
+  std::error_code ec;
+  if (!fs::exists(dir_path, ec) || !fs::is_directory(dir_path, ec))
     return;
 
   // Add dir_path to sys.path
@@ -94,7 +95,22 @@ void PythonPluginEngine::load_plugins_from_dir(const std::string &dir_path) {
     Py_DECREF(py_dir);
   }
 
-  for (const auto &entry : fs::directory_iterator(dir_path)) {
+  for (auto it = fs::recursive_directory_iterator(
+           dir_path, fs::directory_options::skip_permission_denied, ec);
+       it != fs::recursive_directory_iterator(); it.increment(ec)) {
+    if (ec) {
+      break;
+    }
+    const auto &entry = *it;
+    // Skip hidden directories (e.g. .git) and __pycache__
+    if (entry.is_directory()) {
+      std::string filename = entry.path().filename().string();
+      if (filename == "__pycache__" ||
+          (!filename.empty() && filename.front() == '.')) {
+        it.disable_recursion_pending();
+      }
+      continue;
+    }
     if (entry.is_regular_file() && entry.path().extension() == ".py") {
       load_plugin_file(entry.path().string());
     }

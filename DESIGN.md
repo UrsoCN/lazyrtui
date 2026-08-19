@@ -217,8 +217,30 @@ struct UiSnapshot {
 
 ### 3.4 IDL 驱动的 Python 插件与渲染引擎设计
 
-#### 3.4.1 插件架构设计
-允许用户在 `~/.config/lazyrtui/plugins/` 或项目 `./plugins/` 放置 Python 扩展脚本，对指定数值型或复合型 Topic 消息进行自定义渲染。
+#### 3.4.1 插件架构与目录规范
+允许用户在 `~/.config/lazyrtui/plugins/`、项目 `./config/plugins/` 或 `./plugins/` 放置 Python 扩展脚本，对指定数值型或复合型 Topic 消息进行自定义渲染。
+
+- **递归目录发现机制**：`PythonPluginEngine` 采用递归目录遍历（`recursive_directory_iterator`），自动扫描插件根目录下所有嵌套子目录中的 `*.py` 脚本（自动忽略 `__pycache__` 与隐藏目录）。
+- **子目录逻辑分类**：推荐根据话题功能领域组织分类子目录，子目录作为便于用户归类和维护的逻辑结构，不强制绑定 ROS 2 接口类型：
+  - `speech/`：语音交互、实时听写等（如 `speech/asr_result_plugin.py`）
+  - `teleop/`：速度控制、遥控交互等（如 `teleop/cmd_vel_plugin.py`）
+  - `diagnostics/`：系统健康、诊断状态等（如 `diagnostics/diagnostics_plugin.py`）
+- **文件命名规范**：统一采用全小写蛇形命名（Snake Case），以 `_plugin.py` 结尾，文件名清晰对应话题或功能语义（如 `asr_result_plugin.py` 对应 `/speech/asr_result`）。
+- **模块注释规范 (PEP 257 Docstring)**：采用标准 Python 模块级 docstring 注释说明插件用途、目标话题与数据类型，接口保持极简契约（`match` 与 `render`）：
+  ```python
+  """
+  LazyRTUI Topic Plugin: ASR Result Streaming Subtitles
+
+  Topic: /speech/asr_result
+  Type:  speech_interface/msg/AsrResult
+  """
+
+  def match(topic_name: str, msg_type: str) -> bool:
+      return topic_name == "/speech/asr_result" or "AsrResult" in msg_type
+
+  def render(msg: dict, state: dict) -> dict:
+      ...
+  ```
 
 #### 3.4.2 插件工作流规范
 ```mermaid

@@ -3,6 +3,8 @@
 #include "lazyrtui/config_loader.hpp"
 #include <ftxui/component/event.hpp>
 #include <ftxui/screen/screen.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <std_srvs/srv/set_bool.hpp>
 
 namespace lazyrtui {
 
@@ -218,6 +220,66 @@ TEST(AppTest, ServiceCallTypesupportAndExecution) {
   EXPECT_NE(call_response.find("not available"), std::string::npos);
 
   ros_mgr->stop();
+}
+
+TEST(AppTest, ServiceCallRoundtripWithResponseString) {
+  auto ros_mgr = std::make_shared<ROS2Manager>();
+  int argc = 1;
+  char arg0[] = "test_app";
+  char *argv[] = {arg0, nullptr};
+  bool started = ros_mgr->start(argc, argv);
+  ASSERT_TRUE(started);
+
+  auto server_node = std::make_shared<rclcpp::Node>("test_set_bool_server");
+  auto server = server_node->create_service<std_srvs::srv::SetBool>(
+      "/test_set_bool",
+      [](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+         std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+        response->success = request->data;
+        response->message = request->data ? "enabled successfully"
+                                          : "disabled successfully";
+      });
+
+  rclcpp::executors::SingleThreadedExecutor executor;
+  executor.add_node(server_node);
+  std::atomic<bool> server_running{true};
+  std::thread server_thread([&]() {
+    while (server_running.load() && rclcpp::ok()) {
+      executor.spin_some(std::chrono::milliseconds(20));
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  });
+
+  std::mutex cv_m;
+  std::condition_variable cv;
+  bool called = false;
+  bool call_success = false;
+  std::string call_response;
+
+  ros_mgr->call_service_async(
+      "/test_set_bool", "std_srvs/srv/SetBool", "{\"data\": true}",
+      [&](bool success, const std::string &response, double elapsed) {
+        (void)elapsed;
+        std::lock_guard<std::mutex> lock(cv_m);
+        called = true;
+        call_success = success;
+        call_response = response;
+        cv.notify_one();
+      });
+
+  {
+    std::unique_lock<std::mutex> lock(cv_m);
+    cv.wait_for(lock, std::chrono::seconds(5), [&]() { return called; });
+  }
+
+  server_running = false;
+  server_thread.join();
+  ros_mgr->stop();
+
+  EXPECT_TRUE(called);
+  EXPECT_TRUE(call_success);
+  EXPECT_NE(call_response.find("enabled successfully"), std::string::npos);
+  EXPECT_NE(call_response.find("\"success\": true"), std::string::npos);
 }
 
 } // namespace lazyrtui

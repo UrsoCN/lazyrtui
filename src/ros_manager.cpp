@@ -493,20 +493,23 @@ static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service
     const auto* members = static_cast<
         const ::rosidl_typesupport_introspection_cpp::ServiceMembers*>(intro_ts->data);
 
-    // 2. Load C/CPP typesupport dispatcher handle for rcl_client_init / RMW
+    // 2. Load C++ typesupport dispatcher handle for rcl_client_init / RMW.
+    // The structs managed via rosidl_typesupport_introspection_cpp are C++
+    // message structs (std::string, std::vector, rosidl_runtime_cpp), so the
+    // client typesupport must be rosidl_typesupport_cpp to avoid C/C++ ABI mismatch.
     void* client_handle = nullptr;
     const rosidl_service_type_support_t* client_ts = nullptr;
 
-    std::string c_lib_name = "lib" + pkg + "__rosidl_typesupport_c.so";
-    client_handle = dlopen(c_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+    std::string cpp_lib_name = "lib" + pkg + "__rosidl_typesupport_cpp.so";
+    client_handle = dlopen(cpp_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
     if (client_handle) {
-        std::string c_sym_name =
-            "rosidl_typesupport_c__get_service_type_support_handle__" +
+        std::string cpp_sym_name =
+            "rosidl_typesupport_cpp__get_service_type_support_handle__" +
             pkg + "__" + kind + "__" + srv_name;
-        GetTSFn get_c_ts_fn =
-            reinterpret_cast<GetTSFn>(dlsym(client_handle, c_sym_name.c_str()));
-        if (get_c_ts_fn) {
-            client_ts = get_c_ts_fn();
+        GetTSFn get_cpp_ts_fn =
+            reinterpret_cast<GetTSFn>(dlsym(client_handle, cpp_sym_name.c_str()));
+        if (get_cpp_ts_fn) {
+            client_ts = get_cpp_ts_fn();
         }
     }
 
@@ -515,16 +518,16 @@ static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service
             dlclose(client_handle);
             client_handle = nullptr;
         }
-        std::string cpp_lib_name = "lib" + pkg + "__rosidl_typesupport_cpp.so";
-        client_handle = dlopen(cpp_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+        std::string c_lib_name = "lib" + pkg + "__rosidl_typesupport_c.so";
+        client_handle = dlopen(c_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
         if (client_handle) {
-            std::string cpp_sym_name =
-                "rosidl_typesupport_cpp__get_service_type_support_handle__" +
+            std::string c_sym_name =
+                "rosidl_typesupport_c__get_service_type_support_handle__" +
                 pkg + "__" + kind + "__" + srv_name;
-            GetTSFn get_cpp_ts_fn =
-                reinterpret_cast<GetTSFn>(dlsym(client_handle, cpp_sym_name.c_str()));
-            if (get_cpp_ts_fn) {
-                client_ts = get_cpp_ts_fn();
+            GetTSFn get_c_ts_fn =
+                reinterpret_cast<GetTSFn>(dlsym(client_handle, c_sym_name.c_str()));
+            if (get_c_ts_fn) {
+                client_ts = get_c_ts_fn();
             }
         }
     }

@@ -841,7 +841,8 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
     using namespace rosidl_typesupport_introspection_cpp;
 
     auto align_offset = [&](size_t align) {
-        while (offset % align != 0 && offset < size) offset++;
+        if (align == 0) return;
+        while ((offset - 4) % align != 0 && offset < size) offset++;
     };
 
     if (member.is_array_) {
@@ -858,16 +859,27 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
         }
 
         ss << "[";
-        if (count > 20) count = 20;
+        uint32_t display_count = std::min(count, 20u);
         for (uint32_t j = 0; j < count; ++j) {
-            if (j > 0) ss << ", ";
+            if (j > 0 && j < display_count) ss << ", ";
             ::rosidl_typesupport_introspection_cpp::MessageMember elem_member = member;
             elem_member.is_array_ = false;
             elem_member.array_size_ = 0;
-            if (!parse_cdr_field(elem_member, buffer, size, offset, ss, indent_level,
-                                 swap_bytes)) {
-                ss << "null";
+            if (j < display_count) {
+                if (!parse_cdr_field(elem_member, buffer, size, offset, ss, indent_level,
+                                     swap_bytes)) {
+                    ss << "null";
+                }
+            } else {
+                std::stringstream dummy_ss;
+                if (!parse_cdr_field(elem_member, buffer, size, offset, dummy_ss, indent_level,
+                                     swap_bytes)) {
+                    break;
+                }
             }
+        }
+        if (count > display_count) {
+            ss << ", ... (" << count << " items total)";
         }
         ss << "]";
         return true;
@@ -881,11 +893,12 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             ss << (val ? "true" : "false");
             return true;
         }
-        case ROS_TYPE_UINT8: {
+        case ROS_TYPE_UINT8:
+        case ROS_TYPE_OCTET: {
             if (offset >= size) return false;
             uint8_t val = buffer[offset];
             offset += 1;
-            ss << (int)val;
+            ss << static_cast<unsigned>(val);
             return true;
         }
         case ROS_TYPE_INT8:
@@ -893,7 +906,7 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (offset >= size) return false;
             int8_t val = static_cast<int8_t>(buffer[offset]);
             offset += 1;
-            ss << (int)val;
+            ss << static_cast<int>(val);
             return true;
         }
         case ROS_TYPE_UINT16: {
@@ -984,9 +997,10 @@ static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::Messag
             if (swap_bytes) len = cdr_byte_swap(len);
             offset += 4;
             if (len > 0 && offset + len <= size) {
-                std::string str_val(reinterpret_cast<const char*>(buffer + offset), (buffer[offset + len - 1] == '\0') ? len - 1 : len);
+                std::string str_val(reinterpret_cast<const char*>(buffer + offset),
+                                    (buffer[offset + len - 1] == '\0') ? len - 1 : len);
                 offset += len;
-                ss << "\"" << str_val << "\"";
+                ss << nlohmann::json(str_val).dump();
                 return true;
             } else if (len == 0) {
                 ss << "\"\"";
@@ -1023,10 +1037,7 @@ static std::string format_serialized_message(const std::string& type_str, const 
         return ss.str();
     }
 
-    // CDR encapsulation header byte 0: 0x01 = little-endian, 0x00 = big-endian
-    // (bytes 1-3 are options/reserved). Swap when the stream order differs
-    // from the host.
-    const bool swap_bytes = (buffer[0] == 0x01) != g_host_is_little_endian;
+    const bool swap_bytes = should_swap_cdr_bytes(buffer, size);
 
     const auto* members = get_message_members(type_str);
     if (members) {

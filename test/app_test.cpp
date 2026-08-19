@@ -5,6 +5,9 @@
 #include <ftxui/screen/screen.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
+#include <diagnostic_msgs/msg/key_value.hpp>
+#include <std_msgs/msg/string.hpp>
+#include <std_msgs/msg/bool.hpp>
 
 namespace lazyrtui {
 
@@ -328,6 +331,55 @@ TEST(AppTest, ShiftEnterInsertsNewlineInActionInput) {
   const std::string &goal = app.action_goal_json();
   EXPECT_NE(goal.find("{\n"), std::string::npos);
   EXPECT_TRUE(app.is_text_input_focused());
+}
+
+TEST(AppTest, TopicEchoDeserializesStringAndBoolFields) {
+  auto ros_mgr = std::make_shared<ROS2Manager>("test_topic_echo_node");
+  ASSERT_TRUE(ros_mgr->start());
+
+  auto test_pub_node =
+      std::make_shared<rclcpp::Node>("test_echo_pub_node");
+  auto pub = test_pub_node->create_publisher<diagnostic_msgs::msg::KeyValue>(
+      "/test/echo_topic", 10);
+
+  std::promise<std::string> msg_promise;
+  auto msg_future = msg_promise.get_future();
+  std::atomic<bool> received{false};
+
+  bool sub_ok = ros_mgr->subscribe_topic(
+      "/test/echo_topic", "diagnostic_msgs/msg/KeyValue",
+      [&](const std::string &topic, const std::string &serialized_msg) {
+        if (!received.exchange(true)) {
+          msg_promise.set_value(serialized_msg);
+        }
+      });
+  ASSERT_TRUE(sub_ok);
+
+  diagnostic_msgs::msg::KeyValue kv;
+  kv.key = "speech_text";
+  kv.value = "recognized speech audio";
+
+  auto start = std::chrono::steady_clock::now();
+  while (msg_future.wait_for(std::chrono::milliseconds(50)) !=
+         std::future_status::ready) {
+    pub->publish(kv);
+    rclcpp::spin_some(test_pub_node);
+    if (std::chrono::steady_clock::now() - start > std::chrono::seconds(3)) {
+      break;
+    }
+  }
+
+  ASSERT_EQ(msg_future.wait_for(std::chrono::seconds(1)),
+            std::future_status::ready);
+  std::string formatted = msg_future.get();
+  EXPECT_NE(formatted.find("\"key\": \"speech_text\""), std::string::npos);
+  EXPECT_NE(formatted.find("\"value\": \"recognized speech audio\""),
+            std::string::npos);
+  EXPECT_EQ(formatted.find("\"key\": null"), std::string::npos);
+  EXPECT_EQ(formatted.find("\"value\": null"), std::string::npos);
+
+  ros_mgr->unsubscribe_topic("/test/echo_topic");
+  ros_mgr->stop();
 }
 
 } // namespace lazyrtui

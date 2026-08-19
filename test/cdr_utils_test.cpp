@@ -84,4 +84,52 @@ TEST(CdrUtilsTest, HostEndiannessProbeIsConsistent) {
   EXPECT_EQ(cdr_byte_swap(cdr_byte_swap<uint32_t>(0x01020304)), 0x01020304u);
 }
 
+TEST(CdrUtilsTest, DetectsCdrStreamEndianness) {
+  // OMG CDR 1.2 / 2.0 and RTPS encapsulation headers:
+  // CDR_LE: 0x00, 0x01
+  const uint8_t le_hdr1[4] = {0x00, 0x01, 0x00, 0x00};
+  EXPECT_TRUE(is_cdr_stream_little_endian(le_hdr1, sizeof(le_hdr1)));
+
+  // PL_CDR_LE: 0x00, 0x03
+  const uint8_t le_hdr2[4] = {0x00, 0x03, 0x00, 0x00};
+  EXPECT_TRUE(is_cdr_stream_little_endian(le_hdr2, sizeof(le_hdr2)));
+
+  // CDR2_LE: 0x00, 0x07
+  const uint8_t le_hdr3[4] = {0x00, 0x07, 0x00, 0x00};
+  EXPECT_TRUE(is_cdr_stream_little_endian(le_hdr3, sizeof(le_hdr3)));
+
+  // D_CDR2_LE: 0x00, 0x0b
+  const uint8_t le_hdr4[4] = {0x00, 0x0b, 0x00, 0x00};
+  EXPECT_TRUE(is_cdr_stream_little_endian(le_hdr4, sizeof(le_hdr4)));
+
+  // CDR_BE: 0x00, 0x00
+  const uint8_t be_hdr1[4] = {0x00, 0x00, 0x00, 0x00};
+  EXPECT_FALSE(is_cdr_stream_little_endian(be_hdr1, sizeof(be_hdr1)));
+
+  // PL_CDR_BE: 0x00, 0x02
+  const uint8_t be_hdr2[4] = {0x00, 0x02, 0x00, 0x00};
+  EXPECT_FALSE(is_cdr_stream_little_endian(be_hdr2, sizeof(be_hdr2)));
+
+  // CDR2_BE: 0x00, 0x06
+  const uint8_t be_hdr3[4] = {0x00, 0x06, 0x00, 0x00};
+  EXPECT_FALSE(is_cdr_stream_little_endian(be_hdr3, sizeof(be_hdr3)));
+}
+
+TEST(CdrUtilsTest, ShouldSwapCdrBytesMatchesHost) {
+  const uint8_t le_hdr[4] = {0x00, 0x01, 0x00, 0x00};
+  // On little-endian hosts (x86_64, aarch64), LE stream does NOT require swapping.
+  if (g_host_is_little_endian) {
+    EXPECT_FALSE(should_swap_cdr_bytes(le_hdr, sizeof(le_hdr)));
+  } else {
+    EXPECT_TRUE(should_swap_cdr_bytes(le_hdr, sizeof(le_hdr)));
+  }
+
+  const uint8_t be_hdr[4] = {0x00, 0x00, 0x00, 0x00};
+  if (g_host_is_little_endian) {
+    EXPECT_TRUE(should_swap_cdr_bytes(be_hdr, sizeof(be_hdr)));
+  } else {
+    EXPECT_FALSE(should_swap_cdr_bytes(be_hdr, sizeof(be_hdr)));
+  }
+}
+
 }  // namespace lazyrtui

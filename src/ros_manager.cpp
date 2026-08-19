@@ -249,9 +249,13 @@ std::vector<ActionInfo> ROS2Manager::get_actions() {
             std::vector<std::string> action_types;
             for(const auto& t : types) {
                 std::string t_act = t;
-                auto pos = t_act.find("_SendGoal_Service");
-                if(pos != std::string::npos) {
-                    t_act = t_act.substr(0, pos);
+                for (const std::string& sfx : {"_SendGoal_Goal", "_SendGoal_Service", "_SendGoal",
+                                               "_GetResult_Service", "_GetResult", "_FeedbackMessage", "_Goal"}) {
+                    auto pos = t_act.rfind(sfx);
+                    if (pos != std::string::npos && pos + sfx.length() == t_act.length()) {
+                        t_act = t_act.substr(0, pos);
+                        break;
+                    }
                 }
                 action_types.push_back(t_act);
             }
@@ -342,8 +346,24 @@ std::string ROS2Manager::get_service_request_json(const std::string& service_nam
 
 std::string ROS2Manager::get_action_goal_json(const std::string& action_name, const std::string& type_str) {
     (void)action_name;
+    std::string base_type = type_str;
+    for (const std::string& sfx : {"_SendGoal_Goal", "_SendGoal_Service", "_SendGoal",
+                                   "_GetResult_Service", "_GetResult", "_FeedbackMessage", "_Goal"}) {
+        auto pos = base_type.rfind(sfx);
+        if (pos != std::string::npos && pos + sfx.length() == base_type.length()) {
+            base_type = base_type.substr(0, pos);
+            break;
+        }
+    }
+    size_t slash1 = base_type.find('/');
+    if (slash1 != std::string::npos) {
+        size_t slash2 = base_type.find('/', slash1 + 1);
+        if (slash2 == std::string::npos) {
+            base_type = base_type.substr(0, slash1) + "/action/" + base_type.substr(slash1 + 1);
+        }
+    }
     // In ROS 2 the action goal is introspected as its `_Goal` message.
-    const std::string goal_type = type_str + "_Goal";
+    const std::string goal_type = base_type + "_Goal";
     const auto* members = get_message_members(goal_type);
     if (!members) {
         return "{\n  \"error\": \"Cannot load goal typesupport for '" + goal_type + "'\"\n}";

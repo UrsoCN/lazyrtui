@@ -518,8 +518,18 @@ void LazyRTUIApp::send_selected_goal() {
   std::string type = entry.substr(pos + 2);
   if (!type.empty() && type.back() == ']') type.pop_back();
 
+  std::string base_type = type;
+  for (const std::string& sfx : {"_SendGoal_Goal", "_SendGoal_Service", "_SendGoal",
+                                 "_GetResult_Service", "_GetResult", "_FeedbackMessage", "_Goal"}) {
+    auto p = base_type.rfind(sfx);
+    if (p != std::string::npos && p + sfx.length() == base_type.length()) {
+      base_type = base_type.substr(0, p);
+      break;
+    }
+  }
+
   const std::string service_name = name + "/_action/send_goal";
-  const std::string service_type = type + "_SendGoal_Service";
+  const std::string service_type = base_type + "_SendGoal";
 
   nlohmann::json goal;
   try {

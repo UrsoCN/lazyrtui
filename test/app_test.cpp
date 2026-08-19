@@ -185,6 +185,29 @@ TEST(AppTest, ServiceRequestTemplateGeneration) {
   EXPECT_NE(set_bool_tmpl.find("\"data\": false"), std::string::npos);
 }
 
+TEST(AppTest, ActionGoalTemplateGeneration) {
+  auto ros_mgr = std::make_shared<ROS2Manager>();
+  std::string goal_tmpl1 =
+      ros_mgr->get_action_goal_json("/rotate_absolute", "turtlesim/action/RotateAbsolute");
+  EXPECT_NE(goal_tmpl1.find("\"theta\": 0"), std::string::npos);
+  EXPECT_EQ(goal_tmpl1.find("error"), std::string::npos);
+
+  std::string goal_tmpl2 =
+      ros_mgr->get_action_goal_json("/rotate_absolute", "turtlesim/action/RotateAbsolute_SendGoal");
+  EXPECT_NE(goal_tmpl2.find("\"theta\": 0"), std::string::npos);
+  EXPECT_EQ(goal_tmpl2.find("error"), std::string::npos);
+
+  std::string goal_tmpl3 =
+      ros_mgr->get_action_goal_json("/rotate_absolute", "turtlesim/action/RotateAbsolute_SendGoal_Goal");
+  EXPECT_NE(goal_tmpl3.find("\"theta\": 0"), std::string::npos);
+  EXPECT_EQ(goal_tmpl3.find("error"), std::string::npos);
+
+  std::string goal_tmpl4 =
+      ros_mgr->get_action_goal_json("/rotate_absolute", "turtlesim/RotateAbsolute");
+  EXPECT_NE(goal_tmpl4.find("\"theta\": 0"), std::string::npos);
+  EXPECT_EQ(goal_tmpl4.find("error"), std::string::npos);
+}
+
 TEST(AppTest, ServiceCallTypesupportAndExecution) {
   auto ros_mgr = std::make_shared<ROS2Manager>();
   int argc = 1;

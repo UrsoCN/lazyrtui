@@ -121,6 +121,7 @@ Development follows a **test-first** discipline: every functional change (featur
 | `test_ftxui_converter` | `src/ftxui_converter.cpp` — JSON UI spec → FTXUI rendering |
 | `test_cdr_utils` | `src/cdr_utils.hpp` — CDR byte-swap/endianness |
 | `test_python_plugin_engine` | `src/python_plugin_engine.cpp` — Python plugin engine (embeds CPython) |
+| `test_app` | `src/app.cpp` — UI event handling, input focus & hotkey suppression |
 
 New modules MUST get a matching test target in the same commit as the feature.
 

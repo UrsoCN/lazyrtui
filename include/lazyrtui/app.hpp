@@ -73,6 +73,17 @@ public:
   LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config &config);
   ~LazyRTUIApp();
   void run();
+  ftxui::Component
+  build_main_component(std::function<void()> exit_fn = nullptr);
+  bool is_text_input_focused() const;
+
+  int selected_tab() const { return selected_tab_; }
+  int service_pane_focus() const { return service_pane_focus_; }
+  int action_pane_focus() const { return action_pane_focus_; }
+  const std::string &service_request_json() const {
+    return service_request_json_;
+  }
+  const std::string &action_goal_json() const { return action_goal_json_; }
 
   PythonPluginEngine *python_plugin_engine() {
     return python_plugin_engine_.get();
@@ -157,12 +168,14 @@ private:
   int service_pane_focus_ = 0;
   std::string service_request_json_ = "{}";
   std::string service_response_;
+  ftxui::Component service_input_;
 
   // Action tab state
   int selected_action_ = 0;
   int action_pane_focus_ = 0;
   std::string action_goal_json_ = "{}";
   std::string action_response_;
+  ftxui::Component action_input_;
 
   // Interfaces tab state
   int selected_interface_pkg_ = 0;

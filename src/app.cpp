@@ -579,12 +579,15 @@ Component LazyRTUIApp::make_services_tab() {
            (service_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
-  auto input_json = Input(&service_request_json_, "{}");
+  InputOption srv_input_opt;
+  srv_input_opt.multiline = false;
+  srv_input_opt.on_enter = [this]() { call_selected_service(); };
+  service_input_ = Input(&service_request_json_, "{}", srv_input_opt);
   auto call_btn = Button("Call Service", [this]() { call_selected_service(); });
 
-  auto right_container = Container::Vertical({input_json, call_btn});
+  auto right_container = Container::Vertical({service_input_, call_btn});
 
-  auto right_pane = Renderer(right_container, [this, input_json, call_btn]() {
+  auto right_pane = Renderer(right_container, [this, call_btn]() {
     auto snap = std::atomic_load(&ui_snapshot_);
     std::string selected = "None";
     if (snap && selected_service_ >= 0 &&
@@ -600,7 +603,7 @@ Component LazyRTUIApp::make_services_tab() {
     }
 
     return window(text("Service Caller: " + selected),
-                  vbox({text("Request JSON:"), input_json->Render() | border,
+                  vbox({text("Request JSON:"), service_input_->Render() | border,
                         call_btn->Render(), separator(), text("Response:"),
                         text(response) | borderLight})) |
            (service_pane_focus_ == 1 ? borderLight : borderEmpty);
@@ -645,12 +648,15 @@ Component LazyRTUIApp::make_actions_tab() {
            (action_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
-  auto input_json = Input(&action_goal_json_, "{}");
+  InputOption act_input_opt;
+  act_input_opt.multiline = false;
+  act_input_opt.on_enter = [this]() { send_selected_goal(); };
+  action_input_ = Input(&action_goal_json_, "{}", act_input_opt);
   auto goal_btn = Button("Send Goal", [this]() { send_selected_goal(); });
 
-  auto right_container = Container::Vertical({input_json, goal_btn});
+  auto right_container = Container::Vertical({action_input_, goal_btn});
 
-  auto right_pane = Renderer(right_container, [this, input_json, goal_btn]() {
+  auto right_pane = Renderer(right_container, [this, goal_btn]() {
     auto snap = std::atomic_load(&ui_snapshot_);
     std::string selected = "None";
     if (snap && selected_action_ >= 0 &&
@@ -667,7 +673,7 @@ Component LazyRTUIApp::make_actions_tab() {
 
     return window(
                text("Action Client: " + selected),
-               vbox({text("Goal JSON:"), input_json->Render() | border,
+               vbox({text("Goal JSON:"), action_input_->Render() | border,
                      goal_btn->Render(), separator(), text("Response/Status:"),
                      text(response) | borderLight})) |
            (action_pane_focus_ == 1 ? borderLight : borderEmpty);
@@ -845,10 +851,15 @@ Component LazyRTUIApp::make_about_tab() {
                   });
 }
 
-void LazyRTUIApp::run() {
-  auto screen = ScreenInteractive::Fullscreen();
-  screen_ = &screen;
+bool LazyRTUIApp::is_text_input_focused() const {
+  if (service_input_ && service_input_->Focused())
+    return true;
+  if (action_input_ && action_input_->Focused())
+    return true;
+  return false;
+}
 
+Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
   auto tab_toggle = Toggle(&tab_names_, &selected_tab_);
 
   auto tab_container =
@@ -857,7 +868,7 @@ void LazyRTUIApp::run() {
                       make_bags_tab(), make_tf_tab(), make_about_tab()},
                      &selected_tab_);
 
-  auto main_container = Container::Vertical({tab_toggle, tab_container});
+  auto main_container = Container::Vertical({tab_container, tab_toggle});
 
   auto renderer = Renderer(main_container, [this, tab_toggle, tab_container]() {
     // Header
@@ -869,20 +880,26 @@ void LazyRTUIApp::run() {
                                                                : Color::Red),
               text(" ")});
 
-    // Footer (keybindings are user-configurable).
-    auto kb_f = [this](const std::string &key, const char *label) {
-      std::string k = key.empty() ? "-" : key;
-      return std::string("  ") + k + ":" + label;
-    };
-    std::string footer_text = " 1-8:Tab";
-    footer_text += kb_f(config_.keybindings.switch_focus, "Focus");
-    footer_text += kb_f(config_.keybindings.refresh, "Refresh");
-    footer_text += kb_f(config_.keybindings.echo_topic, "Echo");
-    footer_text += kb_f(config_.keybindings.call_service, "Call");
-    footer_text += kb_f(config_.keybindings.send_goal, "Goal");
-    footer_text += kb_f(config_.keybindings.help, "Help");
-    footer_text += kb_f(config_.keybindings.quit, "Quit ");
-    footer_text += " ";
+    // Footer (context-aware: switches to input mode hints when typing).
+    std::string footer_text;
+    if (is_text_input_focused()) {
+      footer_text =
+          " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Tab:Next Field ";
+    } else {
+      auto kb_f = [this](const std::string &key, const char *label) {
+        std::string k = key.empty() ? "-" : key;
+        return std::string("  ") + k + ":" + label;
+      };
+      footer_text = " 1-8:Tab";
+      footer_text += kb_f(config_.keybindings.switch_focus, "Focus");
+      footer_text += kb_f(config_.keybindings.refresh, "Refresh");
+      footer_text += kb_f(config_.keybindings.echo_topic, "Echo");
+      footer_text += kb_f(config_.keybindings.call_service, "Call");
+      footer_text += kb_f(config_.keybindings.send_goal, "Goal");
+      footer_text += kb_f(config_.keybindings.help, "Help");
+      footer_text += kb_f(config_.keybindings.quit, "Quit ");
+      footer_text += " ";
+    }
     auto footer = hbox({text(footer_text) | inverted | flex});
 
     auto main_view = vbox({header, separator(), tab_container->Render() | flex,
@@ -909,7 +926,12 @@ void LazyRTUIApp::run() {
                     kb(config_.keybindings.call_service, "Call service (Services tab)"),
                     kb(config_.keybindings.send_goal, "Send goal (Actions tab)"),
                     kb(config_.keybindings.help, "Toggle this help menu"),
-                    kb(config_.keybindings.quit, "Quit application"), text(""),
+                    kb(config_.keybindings.quit, "Quit application"),
+                    separator(),
+                    text(" * In input fields: hotkeys are temporarily disabled. "
+                         "Press 'Esc' to exit.") |
+                        dim,
+                    text(""),
                     text("Press '" + help_key + "' or 'Esc' to dismiss") | dim})) |
           clear_under | center;
       return dbox({main_view, help_modal});
@@ -918,15 +940,42 @@ void LazyRTUIApp::run() {
     return main_view;
   });
 
-  auto event_handler = CatchEvent(renderer, [this, &screen](Event e) {
+  return CatchEvent(renderer, [this, exit_fn](Event e) {
     // Match a configured single-character keybinding. Empty bindings (and
     // non-character events) never match, so a disabled binding cannot fire.
     auto key_is = [&e](const std::string& binding) {
       return e.is_character() && e.character() == binding;
     };
 
+    if (show_help_) {
+      if (key_is(config_.keybindings.quit)) {
+        if (exit_fn) exit_fn();
+        else if (screen_) screen_->Exit();
+        return true;
+      }
+      if (key_is(config_.keybindings.help) || e == Event::Escape) {
+        show_help_ = false;
+        return true;
+      }
+      return true;
+    }
+
+    // When focused on a text input, suspend all single-key hotkeys
+    // and let the input component receive character / editing events.
+    if (is_text_input_focused()) {
+      if (e == Event::Escape) {
+        // Exit input mode: return focus to the left pane menu.
+        if (selected_tab_ == 2) service_pane_focus_ = 0;
+        if (selected_tab_ == 3) action_pane_focus_ = 0;
+        return true;
+      }
+      // Allow all editing characters, backspaces, arrows, etc. to flow to the input component.
+      return false;
+    }
+
     if (key_is(config_.keybindings.quit)) {
-      screen.Exit();
+      if (exit_fn) exit_fn();
+      else if (screen_) screen_->Exit();
       return true;
     }
     if (key_is(config_.keybindings.help)) {
@@ -1010,19 +1059,26 @@ void LazyRTUIApp::run() {
     }
 
     if (e == Event::Character('j')) {
-      screen.PostEvent(Event::ArrowDown);
+      if (screen_) screen_->PostEvent(Event::ArrowDown);
       return true;
     }
     if (e == Event::Character('k')) {
-      screen.PostEvent(Event::ArrowUp);
+      if (screen_) screen_->PostEvent(Event::ArrowUp);
       return true;
     }
 
     return false;
   });
+}
+
+void LazyRTUIApp::run() {
+  auto screen = ScreenInteractive::Fullscreen();
+  screen_ = &screen;
+
+  auto main_component = build_main_component([&screen]() { screen.Exit(); });
 
   start_refresh_timer();
-  screen.Loop(event_handler);
+  screen.Loop(main_component);
   stop_refresh_timer();
   screen_ = nullptr;
 }

@@ -135,6 +135,41 @@ if(BUILD_TESTING)
                              include ${Python3_INCLUDE_DIRS})
   target_link_libraries(test_python_plugin_engine ${Python3_LIBRARIES}
                         nlohmann_json::nlohmann_json)
+
+  ament_add_gtest(test_app
+    test/app_test.cpp
+    src/app.cpp
+    src/config_loader.cpp
+    src/ftxui_converter.cpp
+    src/python_plugin_engine.cpp
+    src/tf_tree.cpp
+    src/ros_manager.cpp
+  )
+  target_include_directories(test_app PRIVATE
+    include
+    ${Python3_INCLUDE_DIRS}
+  )
+  target_link_libraries(test_app
+    ftxui::screen
+    ftxui::dom
+    ftxui::component
+    yaml-cpp
+    nlohmann_json::nlohmann_json
+    ${Python3_LIBRARIES}
+  )
+  ament_target_dependencies(test_app
+    rclcpp
+    std_msgs
+    geometry_msgs
+    sensor_msgs
+    tf2_ros
+    tf2_msgs
+    rosidl_typesupport_introspection_cpp
+    rosidl_typesupport_cpp
+    rcl_interfaces
+    rcl
+    ament_index_cpp
+  )
 endif()
 
 ament_package()

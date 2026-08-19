@@ -137,6 +137,33 @@ TEST(AppTest, HelpModalCapturesAndDismissesEvents) {
   EXPECT_EQ(app.selected_tab(), 1);
 }
 
+TEST(AppTest, VerticalNavigationBetweenTopBarAndContent) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Initially in tab content (1)
+  EXPECT_EQ(app.main_vertical_focus(), 1);
+  EXPECT_EQ(app.selected_tab(), 0);
+
+  // ArrowUp from top of list moves focus to Top Bar (0)
+  comp->OnEvent(ftxui::Event::ArrowUp);
+  EXPECT_EQ(app.main_vertical_focus(), 0);
+
+  // Left/Right in Top Bar switches selected tab
+  comp->OnEvent(ftxui::Event::ArrowRight);
+  EXPECT_EQ(app.selected_tab(), 1);
+
+  // ArrowDown drops focus back into tab content (1)
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.main_vertical_focus(), 1);
+
+  // Direct hotkey '4' switches to tab 3 and focuses content
+  comp->OnEvent(ftxui::Event::Character('4'));
+  EXPECT_EQ(app.selected_tab(), 3);
+  EXPECT_EQ(app.main_vertical_focus(), 1);
+}
+
 TEST(AppTest, TabNavigationBetweenInputAndButton) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);

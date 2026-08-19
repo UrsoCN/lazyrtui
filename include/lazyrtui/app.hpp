@@ -78,6 +78,7 @@ public:
   bool is_text_input_focused() const;
 
   int selected_tab() const { return selected_tab_; }
+  int main_vertical_focus() const { return main_vertical_focus_; }
   int service_pane_focus() const { return service_pane_focus_; }
   int action_pane_focus() const { return action_pane_focus_; }
   const std::string &service_request_json() const {
@@ -107,6 +108,7 @@ private:
 
   // UI state
   int selected_tab_ = 0;
+  int main_vertical_focus_ = 1;  // 0 = Top Bar (tab_toggle), 1 = Tab Content (tab_container)
   std::vector<std::string> tab_names_;
   bool show_help_ = false;
 

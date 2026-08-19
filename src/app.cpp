@@ -921,7 +921,8 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
                       make_bags_tab(), make_tf_tab(), make_about_tab()},
                      &selected_tab_);
 
-  auto main_container = Container::Vertical({tab_container, tab_toggle});
+  auto main_container =
+      Container::Vertical({tab_toggle, tab_container}, &main_vertical_focus_);
 
   auto renderer = Renderer(main_container, [this, tab_toggle, tab_container]() {
     // Header
@@ -1034,6 +1035,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
         // Exit input mode: return focus to the left pane menu.
         if (selected_tab_ == 2) service_pane_focus_ = 0;
         if (selected_tab_ == 3) action_pane_focus_ = 0;
+        main_vertical_focus_ = 1;
         return true;
       }
       if (is_newline_event(e)) {
@@ -1067,38 +1069,50 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
 
     if (e == Event::Character('1')) {
       selected_tab_ = 0;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('2')) {
       selected_tab_ = 1;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('3')) {
       selected_tab_ = 2;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('4')) {
       selected_tab_ = 3;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('5')) {
       selected_tab_ = 4;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('6')) {
       selected_tab_ = 5;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('7')) {
       selected_tab_ = 6;
+      main_vertical_focus_ = 1;
       return true;
     }
     if (e == Event::Character('8')) {
       selected_tab_ = 7;
+      main_vertical_focus_ = 1;
       return true;
     }
 
     if (e == Event::Tab) {
+      if (main_vertical_focus_ == 0) {
+        main_vertical_focus_ = 1;
+        return true;
+      }
       if (selected_tab_ == 0) {
         node_pane_focus_ = 1 - node_pane_focus_;
         return true;

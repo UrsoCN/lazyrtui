@@ -284,17 +284,16 @@ Python 插件 `render()` 函数返回的 JSON UI Spec 遵循如下 Schema 协议
 #### 配置文件格式规范
 ```yaml
 keybindings:
-  switch_focus: "w"
-  refresh: "r"
-  search: "/"
-  echo_topic: "e"
-  plot_topic: "p"
-  call_service: "c"
-  send_goal: "g"
   help: "?"
   quit: "q"
+  # 可选自定义覆盖：
+  # switch_focus: "w"
+  # refresh: "r"
+  # echo_topic: "e"
+  # call_service: "c"
+  # send_goal: "g"
 
-> **输入模式快捷键隔离与换行机制**：当光标处于 JSON 请求体或 Goal 输入框 (`Input`) 中时，全局单字符快捷键（如 `r`, `c`, `g`, `w`, `1-8`, `q` 等）临时屏蔽，确保字符能够正常录入；按 `Alt+Enter`（或 `Ctrl+Enter`）可在光标处插入换行以支持多行 JSON 结构编辑；按 `Enter` 直接触发 Service Call / Action Send Goal 快捷提交；按 `Esc` 可立即退出输入模式并将焦点返回至左侧菜单列表。
+> **输入模式快捷键隔离与换行机制**：当光标处于 JSON 请求体或 Goal 输入框 (`Input`) 中时，全局快捷键（如 `1-8`, `q` 等）临时屏蔽，确保字符能够正常录入；按 `Alt+Enter`（或 `Ctrl+Enter`）可在光标处插入换行以支持多行 JSON 结构编辑；按 `Enter` 直接触发 Service Call / Action Send Goal 快捷提交；按 `Esc` 可立即退出输入模式并将焦点返回至左侧菜单列表。按 `Tab` 可在不同控件和面板间切换焦点。
 
 ui:
   auto_refresh_interval_ms: 2000

@@ -364,7 +364,7 @@ Component LazyRTUIApp::make_topics_tab() {
   auto menu = Menu(ConstStringListRef(topics_menu_.get()), &selected_topic_);
 
   auto left_pane = Renderer(menu, [this, menu]() {
-    return window(text("Topics (Space/'e' to Toggle)"), menu->Render()) |
+    return window(text("Topics (Space/Enter to Toggle)"), menu->Render()) |
            (topic_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
@@ -381,7 +381,7 @@ Component LazyRTUIApp::make_topics_tab() {
                           separator(), text("Instructions:"),
                           text("  - Select topics in left list using j/k or "
                                "Arrow keys."),
-                          text("  - Press 'Space', 'e', or 'Enter' to toggle "
+                          text("  - Press 'Space' or 'Enter' to toggle "
                                "subscribe/unsubscribe."),
                           text("  - Multiple topics can be subscribed "
                                "simultaneously!") |
@@ -448,25 +448,18 @@ Component LazyRTUIApp::make_topics_tab() {
         auto it = msgs_map.find(topic_name);
         if (it != msgs_map.end() && !it->second.empty()) {
           for (const auto &m : it->second) {
-            std::stringstream ss(m);
-            std::string line;
-            while (std::getline(ss, line)) {
-              msgs.push_back(text(line));
-            }
+            msgs.push_back(text(m));
           }
         } else {
           msgs.push_back(text("Waiting for messages...") | dim);
         }
 
         topic_windows.push_back(
-            window(text(" Echo: " + topic_name + " "), vbox(msgs)) | flex);
+            window(text(" Raw Echo: " + topic_name + " "), vbox(msgs)) | flex);
       }
     }
 
-    return window(text("Live Topic Echoes (" +
-                       std::to_string(subscribed.size()) + " active)"),
-                  vbox(topic_windows)) |
-           (topic_pane_focus_ == 1 ? borderLight : borderEmpty);
+    return vbox(topic_windows);
   });
 
   auto container =
@@ -836,24 +829,42 @@ Component LazyRTUIApp::make_tf_tab() {
 
 Component LazyRTUIApp::make_about_tab() {
   auto left_pane = Renderer([this]() {
-    // Keybindings are user-configurable; render the actual bindings.
-    auto kb = [this](const std::string &key, const char *desc) {
-      std::string k = key.empty() ? "-" : key;
-      if (k.size() < 2) k += " ";
-      return text("  " + k + ": " + desc);
+    Elements about_lines = {
+        text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
+        text("ROS 2 Distro: Unknown"),
+        separator(),
+        text("Keybindings:"),
+        text("  1-8: Switch tabs"),
+        text("  Tab: Toggle pane focus"),
+        text("  j/k: Navigate lists"),
+        text("  Space/Enter: Toggle echo"),
+        text("  Enter: Submit in input mode"),
+        text("  Alt+Enter: Newline in input mode"),
+        text("  Esc: Exit input / Cancel"),
     };
-    return window(text("About"),
-                  vbox({text("LazyRTUI v" LAZYRTUI_VERSION) | bold,
-                        text("ROS 2 Distro: Unknown"), separator(),
-                        text("Keybindings:"), text("  1-8: Switch tabs"),
-                        kb(config_.keybindings.switch_focus, "Toggle focus"),
-                        kb(config_.keybindings.refresh, "Refresh"),
-                        kb(config_.keybindings.echo_topic, "Echo topic"),
-                        kb(config_.keybindings.call_service, "Call service"),
-                        kb(config_.keybindings.send_goal, "Send action goal"),
-                        kb(config_.keybindings.help, "Help"),
-                        kb(config_.keybindings.quit, "Quit")})) |
-           borderLight;
+    auto kb = [this](const std::string &key, const char *desc) {
+      if (key.empty()) return Elements{};
+      std::string k = key;
+      if (k.size() < 2) k += " ";
+      return Elements{text("  " + k + ": " + desc)};
+    };
+    for (const auto &el : kb(config_.keybindings.switch_focus, "Toggle focus"))
+      about_lines.push_back(el);
+    for (const auto &el : kb(config_.keybindings.refresh, "Refresh"))
+      about_lines.push_back(el);
+    for (const auto &el : kb(config_.keybindings.echo_topic, "Echo topic"))
+      about_lines.push_back(el);
+    for (const auto &el : kb(config_.keybindings.call_service, "Call service"))
+      about_lines.push_back(el);
+    for (const auto &el :
+         kb(config_.keybindings.send_goal, "Send action goal"))
+      about_lines.push_back(el);
+    for (const auto &el : kb(config_.keybindings.help, "Help"))
+      about_lines.push_back(el);
+    for (const auto &el : kb(config_.keybindings.quit, "Quit"))
+      about_lines.push_back(el);
+
+    return window(text("About"), vbox(std::move(about_lines))) | borderLight;
   });
 
   auto right_pane = Renderer([this]() {
@@ -929,17 +940,17 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
           " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Alt+Enter:Newline  Tab:Next Field ";
     } else {
       auto kb_f = [this](const std::string &key, const char *label) {
-        std::string k = key.empty() ? "-" : key;
-        return std::string("  ") + k + ":" + label;
+        if (key.empty()) return std::string("");
+        return std::string("  ") + key + ":" + label;
       };
-      footer_text = " 1-8:Tab";
+      footer_text = " 1-8:Tab  j/k:Navigate  Tab:Focus";
       footer_text += kb_f(config_.keybindings.switch_focus, "Focus");
       footer_text += kb_f(config_.keybindings.refresh, "Refresh");
       footer_text += kb_f(config_.keybindings.echo_topic, "Echo");
       footer_text += kb_f(config_.keybindings.call_service, "Call");
       footer_text += kb_f(config_.keybindings.send_goal, "Goal");
       footer_text += kb_f(config_.keybindings.help, "Help");
-      footer_text += kb_f(config_.keybindings.quit, "Quit ");
+      footer_text += kb_f(config_.keybindings.quit, "Quit");
       footer_text += " ";
     }
     auto footer = hbox({text(footer_text) | inverted | flex});
@@ -948,34 +959,48 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
                            separator(), footer});
 
     if (show_help_) {
-      // Keybindings are user-configurable; render the actual bindings.
       auto kb = [this](const std::string &key, const char *desc) {
-        std::string k = key.empty() ? "-" : key;
+        if (key.empty()) return Elements{};
+        std::string k = key;
         if (k.size() < 2) k += " ";
-        return text(" " + k + " : " + desc);
+        return Elements{text(" " + k + " : " + desc)};
       };
       const std::string help_key =
           config_.keybindings.help.empty() ? "?" : config_.keybindings.help;
-      auto help_modal =
-          window(
-              text(" Help ") | bold,
-              vbox({text("Keybindings:"), separator(),
-                    text(" 1-8 : Switch Tab"),
-                    kb(config_.keybindings.switch_focus, "Toggle pane focus"),
-                    text(" j/k : Navigate lists (vim style)"),
-                    kb(config_.keybindings.refresh, "Manual refresh"),
-                    kb(config_.keybindings.echo_topic, "Echo topic (Topics tab)"),
-                    kb(config_.keybindings.call_service, "Call service (Services tab)"),
-                    kb(config_.keybindings.send_goal, "Send goal (Actions tab)"),
-                    kb(config_.keybindings.help, "Toggle this help menu"),
-                    kb(config_.keybindings.quit, "Quit application"),
-                    separator(),
-                    text(" * In input fields: Enter submits, Alt+Enter inserts newline, "
-                         "Esc exits.") |
-                        dim,
-                    text(""),
-                    text("Press '" + help_key + "' or 'Esc' to dismiss") | dim})) |
-          clear_under | center;
+      Elements help_lines = {
+          text("Keybindings:"),
+          separator(),
+          text(" 1-8       : Switch Tab"),
+          text(" Tab       : Toggle pane focus"),
+          text(" j/k       : Navigate lists (vim style)"),
+          text(" Space/Ret : Toggle topic echo (Topics tab)"),
+          text(" Enter     : Submit request/goal (Input mode)"),
+          text(" Alt+Enter : Insert newline (Input mode)"),
+          text(" Esc       : Unfocus input / Exit modal"),
+      };
+      for (const auto &el :
+           kb(config_.keybindings.switch_focus, "Toggle pane focus"))
+        help_lines.push_back(el);
+      for (const auto &el : kb(config_.keybindings.refresh, "Manual refresh"))
+        help_lines.push_back(el);
+      for (const auto &el : kb(config_.keybindings.echo_topic, "Echo topic"))
+        help_lines.push_back(el);
+      for (const auto &el : kb(config_.keybindings.call_service, "Call service"))
+        help_lines.push_back(el);
+      for (const auto &el : kb(config_.keybindings.send_goal, "Send goal"))
+        help_lines.push_back(el);
+      for (const auto &el :
+           kb(config_.keybindings.help, "Toggle this help menu"))
+        help_lines.push_back(el);
+      for (const auto &el : kb(config_.keybindings.quit, "Quit application"))
+        help_lines.push_back(el);
+      help_lines.push_back(separator());
+      help_lines.push_back(text("Press '" + help_key + "' or 'Esc' to dismiss") |
+                           dim);
+
+      auto help_modal = window(text(" Help ") | bold,
+                               vbox(std::move(help_lines))) |
+                        clear_under | center;
       return dbox({main_view, help_modal});
     }
 
@@ -986,7 +1011,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
     // Match a configured single-character keybinding. Empty bindings (and
     // non-character events) never match, so a disabled binding cannot fire.
     auto key_is = [&e](const std::string& binding) {
-      return e.is_character() && e.character() == binding;
+      return !binding.empty() && e.is_character() && e.character() == binding;
     };
 
     if (show_help_) {
@@ -1073,7 +1098,35 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
       return true;
     }
 
-    if (key_is(config_.keybindings.switch_focus)) {
+    if (e == Event::Tab) {
+      if (selected_tab_ == 0) {
+        node_pane_focus_ = 1 - node_pane_focus_;
+        return true;
+      }
+      if (selected_tab_ == 1) {
+        topic_pane_focus_ = 1 - topic_pane_focus_;
+        return true;
+      }
+      if (selected_tab_ == 2 && service_pane_focus_ == 0) {
+        service_pane_focus_ = 1;
+        return true;
+      }
+      if (selected_tab_ == 3 && action_pane_focus_ == 0) {
+        action_pane_focus_ = 1;
+        return true;
+      }
+      if (selected_tab_ == 4) {
+        interface_pane_focus_ = (interface_pane_focus_ + 1) % 3;
+        return true;
+      }
+      if (selected_tab_ == 6) {
+        tf_pane_focus_ = 1 - tf_pane_focus_;
+        return true;
+      }
+    }
+
+    if (!config_.keybindings.switch_focus.empty() &&
+        key_is(config_.keybindings.switch_focus)) {
       if (selected_tab_ == 0)
         node_pane_focus_ = 1 - node_pane_focus_;
       if (selected_tab_ == 1)

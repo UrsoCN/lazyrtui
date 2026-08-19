@@ -53,12 +53,12 @@ TEST(AppTest, SuppressesHotkeysAndTypesInServiceInput) {
   EXPECT_EQ(app.selected_tab(), 2);
   EXPECT_EQ(app.service_pane_focus(), 0);
 
-  // Switch pane focus to right pane (1) using 'w'
-  comp->OnEvent(ftxui::Event::Character('w'));
+  // Switch pane focus to right pane (1) using Tab
+  comp->OnEvent(ftxui::Event::Tab);
   EXPECT_EQ(app.service_pane_focus(), 1);
   EXPECT_TRUE(app.is_text_input_focused());
 
-  // Type keys that would otherwise be hotkeys: 'r' (refresh), 'c' (call), '1' (tab 0), 'q' (quit), 'w' (switch focus)
+  // Type keys that would otherwise be hotkeys: 'r' (refresh), 'c' (call), '1' (tab 0), 'q' (quit)
   std::string test_input = "{\"data\": true}";
   for (char ch : test_input) {
     comp->OnEvent(ftxui::Event::Character(ch));
@@ -66,7 +66,6 @@ TEST(AppTest, SuppressesHotkeysAndTypesInServiceInput) {
 
   // Verify tab did NOT change (e.g. from '1' or '3')
   EXPECT_EQ(app.selected_tab(), 2);
-  // Verify pane focus did NOT switch (e.g. from 'w')
   EXPECT_EQ(app.service_pane_focus(), 1);
   EXPECT_TRUE(app.is_text_input_focused());
 
@@ -93,8 +92,8 @@ TEST(AppTest, SuppressesHotkeysAndTypesInActionInput) {
   EXPECT_EQ(app.selected_tab(), 3);
   EXPECT_EQ(app.action_pane_focus(), 0);
 
-  // Switch pane focus to right pane (1) using 'w'
-  comp->OnEvent(ftxui::Event::Character('w'));
+  // Switch pane focus to right pane (1) using Tab
+  comp->OnEvent(ftxui::Event::Tab);
   EXPECT_EQ(app.action_pane_focus(), 1);
   EXPECT_TRUE(app.is_text_input_focused());
 
@@ -145,7 +144,7 @@ TEST(AppTest, TabNavigationBetweenInputAndButton) {
 
   // Switch to Services tab (2) and right pane (1)
   comp->OnEvent(ftxui::Event::Character('3'));
-  comp->OnEvent(ftxui::Event::Character('w'));
+  comp->OnEvent(ftxui::Event::Tab);
   EXPECT_TRUE(app.is_text_input_focused());
 
   // Tab moves focus from input to "Call Service" button
@@ -164,7 +163,7 @@ TEST(AppTest, VimKeysInInputVsNormalMode) {
 
   // Switch to Services tab (2) and right pane (1)
   comp->OnEvent(ftxui::Event::Character('3'));
-  comp->OnEvent(ftxui::Event::Character('w'));
+  comp->OnEvent(ftxui::Event::Tab);
   EXPECT_TRUE(app.is_text_input_focused());
 
   // Typing 'j' and 'k' in input mode types letters rather than posting arrow keys
@@ -315,7 +314,7 @@ TEST(AppTest, AltEnterInsertsNewlineInServiceInput) {
 
   // Switch to Services tab (2) and right pane (1)
   comp->OnEvent(ftxui::Event::Character('3'));
-  comp->OnEvent(ftxui::Event::Character('w'));
+  comp->OnEvent(ftxui::Event::Tab);
   EXPECT_TRUE(app.is_text_input_focused());
 
   // Type "{" then Alt+Enter (\x1b\r), then "\"data\": true", then Alt+Enter (\x1b\n), then "}"
@@ -340,7 +339,7 @@ TEST(AppTest, AltEnterInsertsNewlineInActionInput) {
 
   // Switch to Actions tab (3) and right pane (1)
   comp->OnEvent(ftxui::Event::Character('4'));
-  comp->OnEvent(ftxui::Event::Character('w'));
+  comp->OnEvent(ftxui::Event::Tab);
   EXPECT_TRUE(app.is_text_input_focused());
 
   // Type "{" then Alt+Enter (\x1b\r), then "\"goal\": 1", then "}"

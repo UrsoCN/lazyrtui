@@ -140,7 +140,7 @@ TEST_F(ConfigLoaderTest, PartialConfigKeepsOtherDefaults) {
   ConfigLoader loader(path);
   Config cfg = loader.load();
   EXPECT_EQ(cfg.keybindings.quit, "x");
-  EXPECT_EQ(cfg.keybindings.switch_focus, "w");  // Untouched key keeps default.
+  EXPECT_EQ(cfg.keybindings.switch_focus, "");  // Untouched key keeps default.
   EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);
   EXPECT_TRUE(cfg.topics.empty());
 }
@@ -150,8 +150,8 @@ TEST_F(ConfigLoaderTest, EmptyConfigKeepsDefaults) {
   ConfigLoader loader(path);
   Config cfg = loader.load();
   EXPECT_EQ(cfg.keybindings.quit, "q");
-  EXPECT_EQ(cfg.keybindings.switch_focus, "w");
-  EXPECT_EQ(cfg.keybindings.refresh, "r");
+  EXPECT_EQ(cfg.keybindings.switch_focus, "");
+  EXPECT_EQ(cfg.keybindings.refresh, "");
   EXPECT_EQ(cfg.ui.auto_refresh_interval_ms, 2000);
   EXPECT_TRUE(cfg.ui.mouse_support);
   EXPECT_TRUE(cfg.topics.empty());
@@ -203,7 +203,7 @@ TEST_F(ConfigLoaderTest, UnknownKeysAreIgnored) {
   ConfigLoader loader(path);
   Config cfg = loader.load();
   EXPECT_EQ(cfg.keybindings.quit, "x");
-  EXPECT_EQ(cfg.keybindings.switch_focus, "w");  // Unknown keys untouched.
+  EXPECT_EQ(cfg.keybindings.switch_focus, "");  // Unknown keys untouched.
   EXPECT_TRUE(cfg.services.empty());
 }
 

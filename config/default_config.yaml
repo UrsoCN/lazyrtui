@@ -1,13 +1,12 @@
 keybindings:
-  switch_focus: "w"
-  refresh: "r"
-  search: "/"
-  echo_topic: "e"
-  plot_topic: "p"
-  call_service: "c"
-  send_goal: "g"
   help: "?"
   quit: "q"
+  # Optional custom bindings:
+  # switch_focus: "w"
+  # refresh: "r"
+  # echo_topic: "e"
+  # call_service: "c"
+  # send_goal: "g"
 
 topics:
   # Example: /turtle1/pose:

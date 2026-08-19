@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <iostream>
 
+#include <ftxui/screen/string.hpp>  // for ftxui::Utf8ToGlyphs
+
 namespace lazyrtui {
 
 ftxui::Color FTXUIConverter::parse_color(const std::string &color_name) {
@@ -137,6 +139,83 @@ ftxui::Element FTXUIConverter::parse_canvas(const nlohmann::json &node) {
          ftxui::size(ftxui::HEIGHT, ftxui::EQUAL, height);
 }
 
+// Build a wrapping paragraph element. ftxui::paragraph only wraps at ASCII
+// spaces and treats a long CJK run as one unbreakable word, so it cannot wrap
+// Chinese subtitles. This implementation branches on content:
+//   - Pure ASCII lines use ftxui::paragraph (clean word-boundary wrapping).
+//   - Lines containing CJK/fullwidth glyphs use a gap-0 flexbox where each
+//     CJK glyph is its own item (adjacent, no gap) and ASCII runs are grouped
+//     into words separated by explicit space items. The flexbox then wraps at
+//     any item boundary — words for ASCII, characters for CJK — so long ASR
+//     subtitles wrap correctly inside the echo box.
+ftxui::Element FTXUIConverter::parse_paragraph(const std::string &content) {
+  ftxui::Elements lines;
+  size_t start = 0;
+  while (true) {
+    size_t end = content.find('\n', start);
+    std::string line = content.substr(start, end == std::string::npos
+                                             ? std::string::npos
+                                             : end - start);
+
+    // Detect CJK/fullwidth glyphs (multi-byte or non-ASCII single bytes).
+    bool has_cjk = false;
+    for (const auto &glyph : ftxui::Utf8ToGlyphs(line)) {
+      if (!glyph.empty() && !(glyph.size() == 1 && (glyph[0] & 0x80) == 0)) {
+        has_cjk = true;
+        break;
+      }
+    }
+
+    if (!has_cjk) {
+      // Pure ASCII: ftxui::paragraph wraps cleanly at word boundaries.
+      lines.push_back(ftxui::paragraph(line));
+    } else {
+      // Contains CJK: gap-0 flexbox with char-level items.
+      ftxui::Elements items;
+      std::string current_word;
+      bool prev_was_word = false;
+      auto flush_word = [&]() {
+        if (!current_word.empty()) {
+          items.push_back(ftxui::text(current_word));
+          current_word.clear();
+        }
+      };
+      for (const auto &glyph : ftxui::Utf8ToGlyphs(line)) {
+        if (glyph == " ") {
+          // Space separates ASCII words: flush the pending word and emit an
+          // explicit space item (gap is 0, so the space must be a real item).
+          flush_word();
+          if (prev_was_word)
+            items.push_back(ftxui::text(" "));
+          prev_was_word = false;
+        } else if (glyph.empty()) {
+          // Utf8ToGlyphs inserts an empty string after fullwidth glyphs; skip.
+          continue;
+        } else if (glyph.size() == 1 && (glyph[0] & 0x80) == 0) {
+          // ASCII glyph: accumulate into a word.
+          current_word += glyph;
+          prev_was_word = true;
+        } else {
+          // CJK/fullwidth glyph: flush any pending ASCII word, then emit the
+          // glyph as its own item (adjacent to neighbors, no gap).
+          flush_word();
+          items.push_back(ftxui::text(glyph));
+          prev_was_word = true;
+        }
+      }
+      flush_word();
+
+      static const auto config = ftxui::FlexboxConfig().SetGap(0, 0);
+      lines.push_back(ftxui::flexbox(std::move(items), config));
+    }
+
+    if (end == std::string::npos)
+      break;
+    start = end + 1;
+  }
+  return ftxui::vbox(std::move(lines));
+}
+
 ftxui::Element FTXUIConverter::parse_node(const nlohmann::json &node) {
   if (node.is_string()) {
     return ftxui::text(node.get<std::string>());
@@ -160,6 +239,11 @@ ftxui::Element FTXUIConverter::parse_node(const nlohmann::json &node) {
   if (type == "text") {
     std::string content = node.value("content", node.value("text", ""));
     return ftxui::text(content) | style;
+  }
+
+  if (type == "paragraph") {
+    std::string content = node.value("content", node.value("text", ""));
+    return parse_paragraph(content) | style;
   }
 
   if (type == "hbox") {

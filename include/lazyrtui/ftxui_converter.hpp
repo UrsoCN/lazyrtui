@@ -20,6 +20,7 @@ private:
   static ftxui::Decorator parse_style(const nlohmann::json &node);
   static ftxui::Color parse_color(const std::string &color_name);
   static ftxui::Element parse_canvas(const nlohmann::json &node);
+  static ftxui::Element parse_paragraph(const std::string &content);
 };
 
 } // namespace lazyrtui

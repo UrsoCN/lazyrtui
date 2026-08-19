@@ -307,4 +307,64 @@ TEST(FTXUIConverterTest, MultipleTextNodes) {
   EXPECT_EQ(elements.size(), 2u);
 }
 
+// --- paragraph (CJK-aware auto-wrapping) ---
+
+TEST(FTXUIConverterTest, ParagraphWrapsAsciiAtWordBoundaries) {
+  // "hello world" in a 5-wide box must wrap onto two lines at the space.
+  nlohmann::json spec = {{"type", "paragraph"}, {"content", "hello world"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  EXPECT_EQ(RenderToString(elements[0], 5, 2), "hello\r\nworld");
+}
+
+TEST(FTXUIConverterTest, ParagraphWrapsCjkAtCharacterBoundaries) {
+  // Chinese has no spaces; each glyph is a wrap unit. "你好世界" in a 4-wide
+  // box must wrap after 2 glyphs (each CJK glyph is 2 cells wide).
+  nlohmann::json spec = {{"type", "paragraph"}, {"content", "你好世界"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  EXPECT_EQ(RenderToString(elements[0], 4, 2), "你好\r\n世界");
+}
+
+TEST(FTXUIConverterTest, ParagraphShortTextDoesNotWrap) {
+  nlohmann::json spec = {{"type", "paragraph"}, {"content", "hi"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  // RenderToString pads rows to the full screen width (5 cells).
+  EXPECT_EQ(RenderToString(elements[0], 5, 1), "hi   ");
+}
+
+TEST(FTXUIConverterTest, ParagraphHonorsStyle) {
+  nlohmann::json spec = {{"type", "paragraph"},
+                         {"content", "x"},
+                         {"style", "bold red"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  ftxui::Screen screen(1, 1);
+  ftxui::Render(screen, elements[0]);
+  EXPECT_TRUE(screen.CellAt(0, 0).bold);
+  EXPECT_EQ(screen.CellAt(0, 0).foreground_color, ftxui::Color::Red);
+}
+
+TEST(FTXUIConverterTest, ParagraphLongCjkWrapsAcrossMultipleLines) {
+  // Real ASR subtitle: a long Chinese sentence in a 10-cell-wide box must
+  // wrap at character boundaries (each CJK glyph is 2 cells -> 5 per line).
+  nlohmann::json spec = {{"type", "paragraph"},
+                         {"content", "今天天气很好我们一起去公园"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  EXPECT_EQ(RenderToString(elements[0], 10, 3),
+            "今天天气很\r\n好我们一起\r\n去公园    ");
+}
+
+TEST(FTXUIConverterTest, ParagraphMixedAsciiAndCjk) {
+  // Mixed content: ASCII words keep their spaces, CJK chars stay adjacent.
+  nlohmann::json spec = {{"type", "paragraph"}, {"content", "hello 你好世界"}};
+  auto elements = FTXUIConverter::parse_ui_spec(spec);
+  ASSERT_EQ(elements.size(), 1u);
+  // 10 cells: "hello " (6) + 你(2) + 好(2) = 10 fits; 世/界 wrap to line 2,
+  // which is padded to the full 10-cell width by RenderToString.
+  EXPECT_EQ(RenderToString(elements[0], 10, 2), "hello 你好\r\n世界      ");
+}
+
 }  // namespace lazyrtui

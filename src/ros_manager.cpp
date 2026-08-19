@@ -424,8 +424,9 @@ static const ::rosidl_typesupport_introspection_cpp::MessageMembers* get_message
 }
 
 struct ServiceTypeSupportHandleInfo {
-    void* lib_handle = nullptr;
-    const rosidl_service_type_support_t* type_support = nullptr;
+    void* intro_lib_handle = nullptr;
+    void* client_lib_handle = nullptr;
+    const rosidl_service_type_support_t* client_ts = nullptr;
     const ::rosidl_typesupport_introspection_cpp::ServiceMembers* members = nullptr;
 };
 
@@ -433,14 +434,15 @@ static std::map<std::string, ServiceTypeSupportHandleInfo> g_service_typesupport
 
 // Loads the runtime introspection typesupport for a service ("pkg/srv/Name").
 // Returns the ServiceMembers (request/response field metadata) and, via
-// out_ts, the rosidl_service_type_support_t* needed by rcl_client_init.
+// out_ts, the rosidl_service_type_support_t* (from rosidl_typesupport_c/cpp)
+// needed by rcl_client_init / RMW.
 static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service_members(
     const std::string& type_str, const rosidl_service_type_support_t** out_ts) {
     // Shares the same guard as the message cache: worker threads call this.
     std::lock_guard<std::mutex> lock(g_typesupport_mutex);
     auto it = g_service_typesupport_cache.find(type_str);
     if (it != g_service_typesupport_cache.end()) {
-        if (out_ts) *out_ts = it->second.type_support;
+        if (out_ts) *out_ts = it->second.client_ts;
         return it->second.members;
     }
 
@@ -465,31 +467,71 @@ static const ::rosidl_typesupport_introspection_cpp::ServiceMembers* get_service
         srv_name.erase(srv_name.size() - 8);
     }
 
-    std::string lib_name =
+    // 1. Load introspection typesupport for member metadata
+    std::string intro_lib_name =
         "lib" + pkg + "__rosidl_typesupport_introspection_cpp.so";
-    void* handle = dlopen(lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
-    if (!handle) return nullptr;
+    void* intro_handle = dlopen(intro_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+    if (!intro_handle) return nullptr;
 
-    std::string sym_name =
+    std::string intro_sym_name =
         "rosidl_typesupport_introspection_cpp__get_service_type_support_handle__" +
         pkg + "__" + kind + "__" + srv_name;
     using GetTSFn = const rosidl_service_type_support_t* (*)();
-    GetTSFn get_ts_fn = reinterpret_cast<GetTSFn>(dlsym(handle, sym_name.c_str()));
-    if (!get_ts_fn) {
-        dlclose(handle);
+    GetTSFn get_intro_ts_fn =
+        reinterpret_cast<GetTSFn>(dlsym(intro_handle, intro_sym_name.c_str()));
+    if (!get_intro_ts_fn) {
+        dlclose(intro_handle);
         return nullptr;
     }
 
-    const rosidl_service_type_support_t* ts = get_ts_fn();
-    if (!ts || !ts->data) {
-        dlclose(handle);
+    const rosidl_service_type_support_t* intro_ts = get_intro_ts_fn();
+    if (!intro_ts || !intro_ts->data) {
+        dlclose(intro_handle);
         return nullptr;
     }
 
     const auto* members = static_cast<
-        const ::rosidl_typesupport_introspection_cpp::ServiceMembers*>(ts->data);
-    g_service_typesupport_cache[type_str] = {handle, ts, members};
-    if (out_ts) *out_ts = ts;
+        const ::rosidl_typesupport_introspection_cpp::ServiceMembers*>(intro_ts->data);
+
+    // 2. Load C/CPP typesupport dispatcher handle for rcl_client_init / RMW
+    void* client_handle = nullptr;
+    const rosidl_service_type_support_t* client_ts = nullptr;
+
+    std::string c_lib_name = "lib" + pkg + "__rosidl_typesupport_c.so";
+    client_handle = dlopen(c_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+    if (client_handle) {
+        std::string c_sym_name =
+            "rosidl_typesupport_c__get_service_type_support_handle__" +
+            pkg + "__" + kind + "__" + srv_name;
+        GetTSFn get_c_ts_fn =
+            reinterpret_cast<GetTSFn>(dlsym(client_handle, c_sym_name.c_str()));
+        if (get_c_ts_fn) {
+            client_ts = get_c_ts_fn();
+        }
+    }
+
+    if (!client_ts) {
+        if (client_handle) {
+            dlclose(client_handle);
+            client_handle = nullptr;
+        }
+        std::string cpp_lib_name = "lib" + pkg + "__rosidl_typesupport_cpp.so";
+        client_handle = dlopen(cpp_lib_name.c_str(), RTLD_LAZY | RTLD_GLOBAL);
+        if (client_handle) {
+            std::string cpp_sym_name =
+                "rosidl_typesupport_cpp__get_service_type_support_handle__" +
+                pkg + "__" + kind + "__" + srv_name;
+            GetTSFn get_cpp_ts_fn =
+                reinterpret_cast<GetTSFn>(dlsym(client_handle, cpp_sym_name.c_str()));
+            if (get_cpp_ts_fn) {
+                client_ts = get_cpp_ts_fn();
+            }
+        }
+    }
+
+    g_service_typesupport_cache[type_str] = {intro_handle, client_handle,
+                                             client_ts, members};
+    if (out_ts) *out_ts = client_ts;
     return members;
 }
 
@@ -504,7 +546,8 @@ static void cleanup_typesupport_caches() {
     g_typesupport_cache.clear();
     for (auto& [type, info] : g_service_typesupport_cache) {
         (void)type;
-        if (info.lib_handle) dlclose(info.lib_handle);
+        if (info.intro_lib_handle) dlclose(info.intro_lib_handle);
+        if (info.client_lib_handle) dlclose(info.client_lib_handle);
     }
     g_service_typesupport_cache.clear();
 }
@@ -642,6 +685,9 @@ static bool fill_struct_members(const ::rosidl_typesupport_introspection_cpp::Me
     if (!members || !obj.is_object()) return false;
     for (uint32_t i = 0; i < members->member_count_; ++i) {
         const auto& member = members->members_[i];
+        if (std::string(member.name_) == "structure_needs_at_least_one_member") {
+            continue;
+        }
         auto it = obj.find(member.name_);
         if (it == obj.end()) return false;  // Missing field: reject loudly.
         if (!fill_struct_field(member, static_cast<char*>(base) + member.offset_, *it)) {
@@ -652,6 +698,34 @@ static bool fill_struct_members(const ::rosidl_typesupport_introspection_cpp::Me
 }
 
 // --- Introspection-driven message struct reading (host struct -> JSON) -----
+
+static void read_struct_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
+                              const void* field, std::stringstream& ss, int indent_level);
+
+static void read_struct_members(const ::rosidl_typesupport_introspection_cpp::MessageMembers* members,
+                                const void* base, std::stringstream& ss, int indent_level) {
+    if (!members) return;
+    if (members->member_count_ == 0 ||
+        (members->member_count_ == 1 &&
+         std::string(members->members_[0].name_) == "structure_needs_at_least_one_member")) {
+        ss << "{}";
+        return;
+    }
+    std::string indent(indent_level * 2, ' ');
+    ss << "{\n";
+    bool first = true;
+    for (uint32_t i = 0; i < members->member_count_; ++i) {
+        const auto& member = members->members_[i];
+        if (std::string(member.name_) == "structure_needs_at_least_one_member") {
+            continue;
+        }
+        if (!first) ss << ",\n";
+        first = false;
+        ss << indent << "  \"" << member.name_ << "\": ";
+        read_struct_field(member, static_cast<const char*>(base) + member.offset_, ss, indent_level + 1);
+    }
+    ss << "\n" << indent << "}";
+}
 
 static void read_struct_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,
                               const void* field, std::stringstream& ss, int indent_level) {
@@ -723,17 +797,7 @@ static void read_struct_field(const ::rosidl_typesupport_introspection_cpp::Mess
         case ROS_TYPE_MESSAGE: {
             if (member.members_ && member.members_->data) {
                 const auto* sub_members = static_cast<const MessageMembers*>(member.members_->data);
-                std::string indent(indent_level * 2, ' ');
-                ss << "{\n";
-                for (uint32_t i = 0; i < sub_members->member_count_; ++i) {
-                    const auto& sub_member = sub_members->members_[i];
-                    if (i > 0) ss << ",\n";
-                    ss << indent << "  \"" << sub_member.name_ << "\": ";
-                    read_struct_field(sub_member,
-                                      static_cast<const char*>(field) + sub_member.offset_,
-                                      ss, indent_level + 1);
-                }
-                ss << "\n" << indent << "}";
+                read_struct_members(sub_members, field, ss, indent_level);
             } else {
                 ss << "null";
             }
@@ -743,20 +807,6 @@ static void read_struct_field(const ::rosidl_typesupport_introspection_cpp::Mess
             ss << "null";
             break;
     }
-}
-
-static void read_struct_members(const ::rosidl_typesupport_introspection_cpp::MessageMembers* members,
-                                const void* base, std::stringstream& ss, int indent_level) {
-    if (!members) return;
-    std::string indent(indent_level * 2, ' ');
-    ss << "{\n";
-    for (uint32_t i = 0; i < members->member_count_; ++i) {
-        const auto& member = members->members_[i];
-        if (i > 0) ss << ",\n";
-        ss << indent << "  \"" << member.name_ << "\": ";
-        read_struct_field(member, static_cast<const char*>(base) + member.offset_, ss, indent_level + 1);
-    }
-    ss << "\n" << indent << "}";
 }
 
 static bool parse_cdr_field(const ::rosidl_typesupport_introspection_cpp::MessageMember& member,

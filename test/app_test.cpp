@@ -169,4 +169,55 @@ TEST(AppTest, VimKeysInInputVsNormalMode) {
   EXPECT_NE(app.service_request_json().find("jk"), std::string::npos);
 }
 
+TEST(AppTest, ServiceRequestTemplateGeneration) {
+  auto ros_mgr = std::make_shared<ROS2Manager>();
+  std::string empty_tmpl =
+      ros_mgr->get_service_request_json("/clear", "std_srvs/srv/Empty");
+  EXPECT_EQ(empty_tmpl, "{}");
+
+  std::string set_bool_tmpl =
+      ros_mgr->get_service_request_json("/set_bool", "std_srvs/srv/SetBool");
+  EXPECT_NE(set_bool_tmpl.find("\"data\": false"), std::string::npos);
+}
+
+TEST(AppTest, ServiceCallTypesupportAndExecution) {
+  auto ros_mgr = std::make_shared<ROS2Manager>();
+  int argc = 1;
+  char arg0[] = "test_app";
+  char *argv[] = {arg0, nullptr};
+  bool started = ros_mgr->start(argc, argv);
+  ASSERT_TRUE(started);
+
+  std::mutex cv_m;
+  std::condition_variable cv;
+  bool called = false;
+  bool call_success = false;
+  std::string call_response;
+
+  ros_mgr->call_service_async(
+      "/non_existent_service", "std_srvs/srv/Empty", "{}",
+      [&](bool success, const std::string &response, double elapsed) {
+        (void)elapsed;
+        std::lock_guard<std::mutex> lock(cv_m);
+        called = true;
+        call_success = success;
+        call_response = response;
+        cv.notify_one();
+      });
+
+  {
+    std::unique_lock<std::mutex> lock(cv_m);
+    cv.wait_for(lock, std::chrono::seconds(5), [&]() { return called; });
+  }
+
+  EXPECT_TRUE(called);
+  EXPECT_FALSE(call_success);
+  // It must NOT fail with "Type support not from this implementation"
+  EXPECT_EQ(call_response.find("Type support not from this implementation"),
+            std::string::npos);
+  EXPECT_NE(call_response.find("not available"), std::string::npos);
+
+  ros_mgr->stop();
+}
+
 } // namespace lazyrtui

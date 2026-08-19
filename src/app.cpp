@@ -581,9 +581,15 @@ Component LazyRTUIApp::make_services_tab() {
 
   InputOption srv_input_opt;
   srv_input_opt.multiline = false;
+  srv_input_opt.cursor_position = &service_input_cursor_;
   srv_input_opt.on_enter = [this]() { call_selected_service(); };
   service_input_ = Input(&service_request_json_, "{}", srv_input_opt);
-  register_text_input(service_input_);
+  register_text_input(service_input_, [this]() {
+    service_input_cursor_ =
+        std::clamp(service_input_cursor_, 0, (int)service_request_json_.size());
+    service_request_json_.insert(service_input_cursor_, "\n");
+    service_input_cursor_ += 1;
+  });
   auto call_btn = Button("Call Service", [this]() { call_selected_service(); });
 
   auto right_container = Container::Vertical({service_input_, call_btn});
@@ -651,9 +657,15 @@ Component LazyRTUIApp::make_actions_tab() {
 
   InputOption act_input_opt;
   act_input_opt.multiline = false;
+  act_input_opt.cursor_position = &action_input_cursor_;
   act_input_opt.on_enter = [this]() { send_selected_goal(); };
   action_input_ = Input(&action_goal_json_, "{}", act_input_opt);
-  register_text_input(action_input_);
+  register_text_input(action_input_, [this]() {
+    action_input_cursor_ =
+        std::clamp(action_input_cursor_, 0, (int)action_goal_json_.size());
+    action_goal_json_.insert(action_input_cursor_, "\n");
+    action_input_cursor_ += 1;
+  });
   auto goal_btn = Button("Send Goal", [this]() { send_selected_goal(); });
 
   auto right_container = Container::Vertical({action_input_, goal_btn});
@@ -853,16 +865,29 @@ Component LazyRTUIApp::make_about_tab() {
                   });
 }
 
-void LazyRTUIApp::register_text_input(Component input) {
-  text_inputs_.push_back(std::move(input));
+void LazyRTUIApp::register_text_input(Component input,
+                                      std::function<void()> on_newline) {
+  text_inputs_.push_back({std::move(input), std::move(on_newline)});
 }
 
 bool LazyRTUIApp::is_text_input_focused() const {
-  for (const auto &input : text_inputs_) {
-    if (input && input->Focused())
+  for (const auto &entry : text_inputs_) {
+    if (entry.component && entry.component->Focused())
       return true;
   }
   return false;
+}
+
+static bool is_newline_event(const ftxui::Event &e) {
+  const std::string &input = e.input();
+  return input == "\x1b[13;2u" || input == "\x1b[27;2;13~" ||
+         input == "\x1b[13;5u" || input == "\x1b[27;5;13~" ||
+         input == "\x1b[13;3u" || input == "\x1b[27;3;13~" ||
+         input == "\x1b\r" || input == "\x1b\n" ||
+         input == "\x1b[13;2~" || input == "\x1b[13;5~" ||
+         input == "\x1b[13;3~" || input == "\x1bO2M" ||
+         input == "\x1bO3M" || input == "\x1bO5M" ||
+         (e.is_character() && e.character() == "\n");
 }
 
 Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
@@ -891,7 +916,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
     std::string footer_text;
     if (is_text_input_focused()) {
       footer_text =
-          " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Tab:Next Field ";
+          " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Shift+Enter:Newline  Tab:Next Field ";
     } else {
       auto kb_f = [this](const std::string &key, const char *label) {
         std::string k = key.empty() ? "-" : key;
@@ -935,8 +960,8 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
                     kb(config_.keybindings.help, "Toggle this help menu"),
                     kb(config_.keybindings.quit, "Quit application"),
                     separator(),
-                    text(" * In input fields: hotkeys are temporarily disabled. "
-                         "Press 'Esc' to exit.") |
+                    text(" * In input fields: Enter submits, Shift+Enter inserts newline, "
+                         "Esc exits.") |
                         dim,
                     text(""),
                     text("Press '" + help_key + "' or 'Esc' to dismiss") | dim})) |
@@ -975,6 +1000,17 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
         if (selected_tab_ == 2) service_pane_focus_ = 0;
         if (selected_tab_ == 3) action_pane_focus_ = 0;
         return true;
+      }
+      if (is_newline_event(e)) {
+        // Shift+Enter / Alt+Enter: Insert newline into the focused input without submitting.
+        for (auto &entry : text_inputs_) {
+          if (entry.component && entry.component->Focused()) {
+            if (entry.on_newline) {
+              entry.on_newline();
+            }
+            return true;
+          }
+        }
       }
       // Allow all editing characters, backspaces, arrows, etc. to flow to the input component.
       return false;

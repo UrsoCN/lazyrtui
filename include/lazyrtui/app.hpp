@@ -166,6 +166,7 @@ private:
   // Service tab state
   int selected_service_ = 0;
   int service_pane_focus_ = 0;
+  int service_input_cursor_ = 0;
   std::string service_request_json_ = "{}";
   std::string service_response_;
   ftxui::Component service_input_;
@@ -173,13 +174,19 @@ private:
   // Action tab state
   int selected_action_ = 0;
   int action_pane_focus_ = 0;
+  int action_input_cursor_ = 0;
   std::string action_goal_json_ = "{}";
   std::string action_response_;
   ftxui::Component action_input_;
 
-  // Registered text input widgets for generic focus detection
-  std::vector<ftxui::Component> text_inputs_;
-  void register_text_input(ftxui::Component input);
+  // Registered text input widgets for generic focus detection and newline insertion
+  struct TextInputEntry {
+    ftxui::Component component;
+    std::function<void()> on_newline;
+  };
+  std::vector<TextInputEntry> text_inputs_;
+  void register_text_input(ftxui::Component input,
+                           std::function<void()> on_newline = nullptr);
 
   // Interfaces tab state
   int selected_interface_pkg_ = 0;

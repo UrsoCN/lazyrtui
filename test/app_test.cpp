@@ -282,4 +282,52 @@ TEST(AppTest, ServiceCallRoundtripWithResponseString) {
   EXPECT_NE(call_response.find("\"success\": true"), std::string::npos);
 }
 
+TEST(AppTest, ShiftEnterInsertsNewlineInServiceInput) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Switch to Services tab (2) and right pane (1)
+  comp->OnEvent(ftxui::Event::Character('3'));
+  comp->OnEvent(ftxui::Event::Character('w'));
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // Type "{" then Shift+Enter (CSI u), then "\"data\": true", then Shift+Enter (XTerm modifyOtherKeys), then "}"
+  comp->OnEvent(ftxui::Event::Character('{'));
+  comp->OnEvent(ftxui::Event::Special("\x1b[13;2u"));
+  for (char ch : std::string("\"data\": true")) {
+    comp->OnEvent(ftxui::Event::Character(ch));
+  }
+  comp->OnEvent(ftxui::Event::Special("\x1b[27;2;13~"));
+  comp->OnEvent(ftxui::Event::Character('}'));
+
+  const std::string &req = app.service_request_json();
+  EXPECT_NE(req.find("{\n"), std::string::npos);
+  EXPECT_NE(req.find("true\n"), std::string::npos);
+  EXPECT_TRUE(app.is_text_input_focused());
+}
+
+TEST(AppTest, ShiftEnterInsertsNewlineInActionInput) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Switch to Actions tab (3) and right pane (1)
+  comp->OnEvent(ftxui::Event::Character('4'));
+  comp->OnEvent(ftxui::Event::Character('w'));
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // Type "{" then Alt+Enter (\x1b\r), then "\"goal\": 1", then "}"
+  comp->OnEvent(ftxui::Event::Character('{'));
+  comp->OnEvent(ftxui::Event::Special("\x1b\r"));
+  for (char ch : std::string("\"goal\": 1")) {
+    comp->OnEvent(ftxui::Event::Character(ch));
+  }
+  comp->OnEvent(ftxui::Event::Character('}'));
+
+  const std::string &goal = app.action_goal_json();
+  EXPECT_NE(goal.find("{\n"), std::string::npos);
+  EXPECT_TRUE(app.is_text_input_focused());
+}
+
 } // namespace lazyrtui

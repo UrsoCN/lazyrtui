@@ -944,7 +944,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
         if (key.empty()) return std::string("");
         return std::string("  ") + key + ":" + label;
       };
-      footer_text = " 1-8:Tab  j/k:Navigate  Tab:Focus";
+      footer_text = " 1-8:Tab  j/k:Navigate  Tab:Focus  Esc:TopBar";
       footer_text += kb_f(config_.keybindings.switch_focus, "Focus");
       footer_text += kb_f(config_.keybindings.refresh, "Refresh");
       footer_text += kb_f(config_.keybindings.echo_topic, "Echo");
@@ -977,7 +977,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
           text(" Space/Ret : Toggle topic echo (Topics tab)"),
           text(" Enter     : Submit request/goal (Input mode)"),
           text(" Alt+Enter : Insert newline (Input mode)"),
-          text(" Esc       : Unfocus input / Exit modal"),
+          text(" Esc       : Unfocus / Return to Top Bar / Exit modal"),
       };
       for (const auto &el :
            kb(config_.keybindings.switch_focus, "Toggle pane focus"))
@@ -1062,8 +1062,46 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
       show_help_ = !show_help_;
       return true;
     }
-    if (e == Event::Escape && show_help_) {
-      show_help_ = false;
+
+    if (e == Event::Escape) {
+      if (show_help_) {
+        show_help_ = false;
+        return true;
+      }
+
+      // If in a subpane, return focus to the left pane first.
+      bool in_sub_pane = false;
+      if (selected_tab_ == 0 && node_pane_focus_ != 0) {
+        node_pane_focus_ = 0;
+        in_sub_pane = true;
+      } else if (selected_tab_ == 1 && topic_pane_focus_ != 0) {
+        topic_pane_focus_ = 0;
+        in_sub_pane = true;
+      } else if (selected_tab_ == 2 && service_pane_focus_ != 0) {
+        service_pane_focus_ = 0;
+        in_sub_pane = true;
+      } else if (selected_tab_ == 3 && action_pane_focus_ != 0) {
+        action_pane_focus_ = 0;
+        in_sub_pane = true;
+      } else if (selected_tab_ == 4 && interface_pane_focus_ != 0) {
+        interface_pane_focus_ = 0;
+        in_sub_pane = true;
+      } else if (selected_tab_ == 6 && tf_pane_focus_ != 0) {
+        tf_pane_focus_ = 0;
+        in_sub_pane = true;
+      }
+
+      if (in_sub_pane) {
+        main_vertical_focus_ = 1;
+        return true;
+      }
+
+      // If already in the left menu, return focus to the Top Bar.
+      if (main_vertical_focus_ == 1) {
+        main_vertical_focus_ = 0;
+        return true;
+      }
+
       return true;
     }
 

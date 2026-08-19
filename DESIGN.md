@@ -160,15 +160,12 @@ struct UiSnapshot {
 | 按键 | 功能说明 | 作用范围 |
 | :---: | :--- | :--- |
 | `1` ~ `8` | 快速直接切换至对应的 Tab 页 | 全局 |
-| `w` | 在左侧列表面板 (Left Pane) 与右侧详情面板 (Right Pane) 之间循环切换焦点 | 全局（双面板 Tab） |
+| `Tab` | 在左侧列表菜单与右侧面板/控件之间切换焦点 | 全局 |
 | `j` / `Down` | Vim 式向下移动菜单/列表选中项 | 当前聚焦面板 |
-| `k` / `Up` | Vim 式向上移动菜单/列表选中项 | 当前聚焦面板 |
-| `r` | 强制立即刷新当前 ROS 2 拓扑数据 | 全局 |
-| `e` | 切换当前选中 Topic 的 Echo 监听 / 取消监听状态 | Topic Tab |
-| `c` | 发起当前选中 Service 的调用请求 | Service Tab |
-| `g` | 发起当前选中 Action 的 Goal 发送请求 | Action Tab |
+| `k` / `Up` | Vim 式向上移动菜单/列表选中项（列表顶端按 Up 可进入 Top Bar） | 当前聚焦面板 |
+| `Space` / `Enter` | 切换当前选中 Topic 的 Echo 监听 / 取消监听状态（或点击按钮） | Topic Tab / 操作区 |
 | `?` | 打开 / 关闭全局快捷键与帮助说明浮层 (Help Modal) | 全局 |
-| `Esc` | 关闭 Help Modal 弹窗 | 弹窗激活时 |
+| `Esc` | 层级式逐级返回：输入框 -> 左侧菜单列表 -> 顶部 Top Bar；或关闭 Help Modal 弹窗 | 全局 |
 | `q` | 安全退出 LazyRTUI 应用程序 | 全局 |
 
 #### 8 个 Tab 页详细规格
@@ -293,7 +290,7 @@ keybindings:
   # call_service: "c"
   # send_goal: "g"
 
-> **输入模式快捷键隔离与换行机制**：当光标处于 JSON 请求体或 Goal 输入框 (`Input`) 中时，全局快捷键（如 `1-8`, `q` 等）临时屏蔽，确保字符能够正常录入；按 `Alt+Enter`（或 `Ctrl+Enter`）可在光标处插入换行以支持多行 JSON 结构编辑；按 `Enter` 直接触发 Service Call / Action Send Goal 快捷提交；按 `Esc` 可立即退出输入模式并将焦点返回至左侧菜单列表。按 `Tab` 可在不同控件和面板间切换焦点。
+> **输入模式快捷键隔离与换行机制**：当光标处于 JSON 请求体或 Goal 输入框 (`Input`) 中时，全局快捷键（如 `1-8`, `q` 等）临时屏蔽，确保字符能够正常录入；按 `Alt+Enter`（或 `Ctrl+Enter`）可在光标处插入换行以支持多行 JSON 结构编辑；按 `Enter` 直接触发 Service Call / Action Send Goal 快捷提交；按 `Esc` 支持层级式逐级返回（输入框 -> 左侧菜单列表 -> 顶部 Top Bar）。按 `Tab` 可在不同控件和面板间切换焦点。
 
 ui:
   auto_refresh_interval_ms: 2000

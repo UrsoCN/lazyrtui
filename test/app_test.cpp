@@ -164,6 +164,38 @@ TEST(AppTest, VerticalNavigationBetweenTopBarAndContent) {
   EXPECT_EQ(app.main_vertical_focus(), 1);
 }
 
+TEST(AppTest, EscKeyHierarchicalBackNavigation) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // 1. Switch to Services tab (2)
+  comp->OnEvent(ftxui::Event::Character('3'));
+  EXPECT_EQ(app.selected_tab(), 2);
+  EXPECT_EQ(app.main_vertical_focus(), 1);
+  EXPECT_EQ(app.service_pane_focus(), 0);
+
+  // 2. Tab into input
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.service_pane_focus(), 1);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // 3. First Esc: Exits input mode to left menu
+  comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_EQ(app.service_pane_focus(), 0);
+  EXPECT_EQ(app.main_vertical_focus(), 1);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // 4. Second Esc: Exits left menu to Top Bar
+  comp->OnEvent(ftxui::Event::Escape);
+  EXPECT_EQ(app.main_vertical_focus(), 0);
+
+  // 5. In Top Bar, ArrowDown returns to tab content
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.main_vertical_focus(), 1);
+  EXPECT_EQ(app.service_pane_focus(), 0);
+}
+
 TEST(AppTest, TabNavigationBetweenInputAndButton) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);

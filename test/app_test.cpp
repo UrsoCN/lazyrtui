@@ -285,7 +285,7 @@ TEST(AppTest, ServiceCallRoundtripWithResponseString) {
   EXPECT_NE(call_response.find("\"success\": true"), std::string::npos);
 }
 
-TEST(AppTest, ShiftEnterInsertsNewlineInServiceInput) {
+TEST(AppTest, AltEnterInsertsNewlineInServiceInput) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);
   auto comp = app.build_main_component();
@@ -295,13 +295,13 @@ TEST(AppTest, ShiftEnterInsertsNewlineInServiceInput) {
   comp->OnEvent(ftxui::Event::Character('w'));
   EXPECT_TRUE(app.is_text_input_focused());
 
-  // Type "{" then Shift+Enter (CSI u), then "\"data\": true", then Shift+Enter (XTerm modifyOtherKeys), then "}"
+  // Type "{" then Alt+Enter (\x1b\r), then "\"data\": true", then Alt+Enter (\x1b\n), then "}"
   comp->OnEvent(ftxui::Event::Character('{'));
-  comp->OnEvent(ftxui::Event::Special("\x1b[13;2u"));
+  comp->OnEvent(ftxui::Event::Special("\x1b\r"));
   for (char ch : std::string("\"data\": true")) {
     comp->OnEvent(ftxui::Event::Character(ch));
   }
-  comp->OnEvent(ftxui::Event::Special("\x1b[27;2;13~"));
+  comp->OnEvent(ftxui::Event::Special("\x1b\n"));
   comp->OnEvent(ftxui::Event::Character('}'));
 
   const std::string &req = app.service_request_json();
@@ -310,7 +310,7 @@ TEST(AppTest, ShiftEnterInsertsNewlineInServiceInput) {
   EXPECT_TRUE(app.is_text_input_focused());
 }
 
-TEST(AppTest, ShiftEnterInsertsNewlineInActionInput) {
+TEST(AppTest, AltEnterInsertsNewlineInActionInput) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);
   auto comp = app.build_main_component();

@@ -916,7 +916,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
     std::string footer_text;
     if (is_text_input_focused()) {
       footer_text =
-          " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Shift+Enter:Newline  Tab:Next Field ";
+          " [Input Mode]  Esc:Unfocus/Back  Enter:Submit  Alt+Enter:Newline  Tab:Next Field ";
     } else {
       auto kb_f = [this](const std::string &key, const char *label) {
         std::string k = key.empty() ? "-" : key;
@@ -960,7 +960,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
                     kb(config_.keybindings.help, "Toggle this help menu"),
                     kb(config_.keybindings.quit, "Quit application"),
                     separator(),
-                    text(" * In input fields: Enter submits, Shift+Enter inserts newline, "
+                    text(" * In input fields: Enter submits, Alt+Enter inserts newline, "
                          "Esc exits.") |
                         dim,
                     text(""),
@@ -1002,7 +1002,7 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
         return true;
       }
       if (is_newline_event(e)) {
-        // Shift+Enter / Alt+Enter: Insert newline into the focused input without submitting.
+        // Alt+Enter / Ctrl+Enter: Insert newline into the focused input without submitting.
         for (auto &entry : text_inputs_) {
           if (entry.component && entry.component->Focused()) {
             if (entry.on_newline) {

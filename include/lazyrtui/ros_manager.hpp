@@ -54,6 +54,8 @@ using ActionFeedbackCallback = std::function<void(
     const std::string &feedback_json)>;
 using ActionResultCallback = std::function<void(
     bool success, int8_t status, const std::string &result_json, double elapsed_ms)>;
+using ActionCancelCallback = std::function<void(
+    bool success, const std::string &response_json)>;
 
 class ROS2Manager {
 public:
@@ -96,6 +98,8 @@ public:
                               const std::string &goal_json,
                               ActionFeedbackCallback feedback_cb,
                               ActionResultCallback result_cb);
+  void cancel_action_goal_async(const std::string &action_name,
+                                ActionCancelCallback callback = nullptr);
 
   // Interface tree
   std::map<std::string, std::vector<std::string>> get_interfaces_tree();

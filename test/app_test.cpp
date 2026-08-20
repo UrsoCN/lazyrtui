@@ -700,4 +700,70 @@ TEST(AppTest, ActionGoalSendAndStreamingExecution) {
   ros_mgr->stop();
 }
 
+TEST(AppTest, TabNavigationBetweenActionInputAndButtons) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Switch to Actions tab (3) and right pane (1)
+  comp->OnEvent(ftxui::Event::Character('4'));
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // Tab moves focus from input to "Send Goal" button
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // Tab moves focus to "Cancel Goal" button
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // Tab wraps back to goal input
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // Render check
+  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120),
+                                      ftxui::Dimension::Fixed(30));
+  ftxui::Render(screen, comp->Render());
+  std::string out = screen.ToString();
+  EXPECT_NE(out.find("Send Goal"), std::string::npos);
+  EXPECT_NE(out.find("Cancel Goal"), std::string::npos);
+}
+
+TEST(AppTest, ActionGoalCancelExecution) {
+  auto ros_mgr = std::make_shared<ROS2Manager>();
+  int argc = 1;
+  char arg0[] = "test_app";
+  char *argv[] = {arg0, nullptr};
+  bool started = ros_mgr->start(argc, argv);
+  ASSERT_TRUE(started);
+
+  std::mutex cv_m;
+  std::condition_variable cv;
+  bool cancel_called = false;
+  bool cancel_success = false;
+  std::string cancel_res;
+
+  ros_mgr->cancel_action_goal_async(
+      "/non_existent_action",
+      [&](bool success, const std::string &res) {
+        std::lock_guard<std::mutex> lock(cv_m);
+        cancel_called = true;
+        cancel_success = success;
+        cancel_res = res;
+        cv.notify_one();
+      });
+
+  {
+    std::unique_lock<std::mutex> lock(cv_m);
+    cv.wait_for(lock, std::chrono::seconds(5), [&]() { return cancel_called; });
+  }
+
+  EXPECT_TRUE(cancel_called);
+  EXPECT_FALSE(cancel_success);
+
+  ros_mgr->stop();
+}
+
 } // namespace lazyrtui

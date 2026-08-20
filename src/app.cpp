@@ -645,6 +645,35 @@ void LazyRTUIApp::send_selected_goal() {
       });
 }
 
+void LazyRTUIApp::cancel_selected_goal() {
+  auto snap = std::atomic_load(&ui_snapshot_);
+  if (!snap || !ros_mgr_ || selected_action_ < 0 ||
+      selected_action_ >= (int)snap->actions_list.size()) {
+    return;
+  }
+  const std::string& entry = snap->actions_list[selected_action_];
+  size_t pos = entry.find(" [");
+  if (pos == std::string::npos) return;
+  std::string name = entry.substr(0, pos);
+
+  {
+    std::lock_guard<std::mutex> lock(data_mutex_);
+    action_response_ +=
+        "[status] Requesting goal cancellation for " + name + " ...\n";
+  }
+
+  ros_mgr_->cancel_action_goal_async(
+      name, [this](bool success, const std::string& response_json) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        if (success) {
+          action_response_ += "[status] Cancel goal request accepted.\n";
+        } else {
+          action_response_ +=
+              "[error] Cancel goal failed: " + response_json + "\n";
+        }
+      });
+}
+
 Component LazyRTUIApp::make_services_tab() {
   MenuOption menu_opt;
   menu_opt.on_change = [this]() {
@@ -767,10 +796,12 @@ Component LazyRTUIApp::make_actions_tab() {
     action_input_cursor_ += 1;
   });
   auto goal_btn = Button("Send Goal", [this]() { send_selected_goal(); });
+  auto cancel_btn = Button("Cancel Goal", [this]() { cancel_selected_goal(); });
 
-  auto right_container = Container::Vertical({action_input_, goal_btn});
+  auto right_container =
+      Container::Vertical({action_input_, goal_btn, cancel_btn});
 
-  auto right_pane = Renderer(right_container, [this, goal_btn]() {
+  auto right_pane = Renderer(right_container, [this, goal_btn, cancel_btn]() {
     auto snap = std::atomic_load(&ui_snapshot_);
     std::string selected = "None";
     if (snap && selected_action_ >= 0 &&
@@ -799,7 +830,8 @@ Component LazyRTUIApp::make_actions_tab() {
       } else if (line.rfind("[feedback]", 0) == 0) {
         resp_lines.push_back(text(line) | color(Color::CyanLight));
       } else if (line.rfind("[accepted]", 0) == 0 || line.rfind("[ACCEPTED]", 0) == 0 ||
-                 line.rfind("[status]", 0) == 0 || line.rfind("[EXECUTING]", 0) == 0) {
+                 line.rfind("[status]", 0) == 0 || line.rfind("[EXECUTING]", 0) == 0 ||
+                 line.rfind("[CANCELING]", 0) == 0) {
         resp_lines.push_back(text(line) | color(Color::YellowLight));
       } else {
         resp_lines.push_back(text(line));
@@ -813,7 +845,8 @@ Component LazyRTUIApp::make_actions_tab() {
     return window(
                text("Action Client: " + selected),
                vbox({text("Goal JSON:"), action_input_->Render() | border,
-                     goal_btn->Render(), separator(), text("Response/Status:"),
+                     hbox({goal_btn->Render(), text("  "), cancel_btn->Render()}),
+                     separator(), text("Response/Status:"),
                      scroll_view(vbox(std::move(resp_lines)) | borderLight,
                                  action_scroll_)})) |
            (action_pane_focus_ == 1 ? borderLight : borderEmpty);

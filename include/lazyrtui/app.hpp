@@ -136,6 +136,7 @@ private:
   // Service/action invocation shared by the tab buttons and keybindings.
   void call_selected_service();
   void send_selected_goal();
+  void cancel_selected_goal();
 
   // Consumes Up/Down/PgUp/PgDn/Home/End for the currently focused detail
   // pane (UI-thread scroll state only). Returns true when handled.

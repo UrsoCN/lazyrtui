@@ -57,6 +57,9 @@ struct ROS2Manager::Impl {
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_static_sub_;
 
+    std::mutex active_goals_mutex_;
+    std::map<std::string, std::vector<uint8_t>> active_action_goals_;
+
     // Managed worker for async service calls (Issue #5): no more per-call
     // detached threads. The worker is created unconditionally so calls work
     // even before a ROS connection exists; it is joined exactly once in
@@ -1008,6 +1011,11 @@ void ROS2Manager::send_action_goal_async(
     send_goal_req["goal_id"] = {{"uuid", uuid_bytes}};
     send_goal_req["goal"] = goal_obj;
 
+    {
+        std::lock_guard<std::mutex> lock(impl_->active_goals_mutex_);
+        impl_->active_action_goals_[action_name] = uuid_bytes;
+    }
+
     const std::string feedback_topic = action_name + "/_action/feedback";
     const std::string feedback_type = base_type + "_FeedbackMessage";
     const std::string send_goal_srv = action_name + "/_action/send_goal";
@@ -1042,10 +1050,14 @@ void ROS2Manager::send_action_goal_async(
 
     call_service_async(
         send_goal_srv, send_goal_type, send_goal_req.dump(),
-        [this, feedback_topic, get_result_srv, get_result_type, uuid_bytes,
+        [this, action_name, feedback_topic, get_result_srv, get_result_type, uuid_bytes,
          result_cb](bool success, const std::string& response_json,
                     double elapsed_ms) {
             if (!success) {
+                {
+                    std::lock_guard<std::mutex> lock(impl_->active_goals_mutex_);
+                    impl_->active_action_goals_.erase(action_name);
+                }
                 unsubscribe_topic(feedback_topic);
                 if (result_cb) result_cb(false, 0, response_json, elapsed_ms);
                 return;
@@ -1059,6 +1071,10 @@ void ROS2Manager::send_action_goal_async(
             }
 
             if (!accepted) {
+                {
+                    std::lock_guard<std::mutex> lock(impl_->active_goals_mutex_);
+                    impl_->active_action_goals_.erase(action_name);
+                }
                 unsubscribe_topic(feedback_topic);
                 if (result_cb)
                     result_cb(false, 1,
@@ -1072,9 +1088,13 @@ void ROS2Manager::send_action_goal_async(
 
             call_service_async(
                 get_result_srv, get_result_type, get_result_req.dump(),
-                [this, feedback_topic, result_cb](
+                [this, action_name, feedback_topic, result_cb](
                     bool res_success, const std::string& res_json,
                     double res_elapsed_ms) {
+                    {
+                        std::lock_guard<std::mutex> lock(impl_->active_goals_mutex_);
+                        impl_->active_action_goals_.erase(action_name);
+                    }
                     unsubscribe_topic(feedback_topic);
                     if (!result_cb) return;
                     if (!res_success) {
@@ -1094,6 +1114,46 @@ void ROS2Manager::send_action_goal_async(
                     result_cb(status == 4, status, result_str,
                               res_elapsed_ms);
                 });
+        });
+}
+
+void ROS2Manager::cancel_action_goal_async(
+    const std::string& action_name, ActionCancelCallback callback) {
+    std::vector<uint8_t> uuid_bytes(16, 0);
+    {
+        std::lock_guard<std::mutex> lock(impl_->active_goals_mutex_);
+        auto it = impl_->active_action_goals_.find(action_name);
+        if (it != impl_->active_action_goals_.end()) {
+            uuid_bytes = it->second;
+        }
+    }
+
+    nlohmann::json cancel_req;
+    cancel_req["goal_info"] = {
+        {"goal_id", {{"uuid", uuid_bytes}}},
+        {"stamp", {{"sec", 0}, {"nanosec", 0}}}
+    };
+
+    const std::string cancel_srv = action_name + "/_action/cancel_goal";
+    const std::string cancel_type = "action_msgs/srv/CancelGoal";
+
+    call_service_async(
+        cancel_srv, cancel_type, cancel_req.dump(),
+        [callback](bool success, const std::string& response_json,
+                   double /*elapsed_ms*/) {
+            if (!callback) return;
+            if (!success) {
+                callback(false, response_json);
+                return;
+            }
+            int8_t return_code = -1;
+            try {
+                auto resp_obj = nlohmann::json::parse(response_json);
+                return_code = resp_obj.value("return_code", -1);
+            } catch (...) {
+            }
+            // return_code == 0 indicates ERROR_NONE
+            callback(return_code == 0, response_json);
         });
 }
 

@@ -73,15 +73,12 @@ TEST(TFTreeTest, EmptyChildFrameIsParentedToBase) {
   EXPECT_EQ(roots["base"]->children[""]->parent_id, "base");
 }
 
-TEST(TFTreeTest, SelfParentingOrphansFrame) {
+TEST(TFTreeTest, SelfParentingRejected) {
   TFTree tree;
-  tree.update_transform("a", "a", 0, 0, 0, 0, 0, 0, 1);
-  // parent_id == "a" is non-empty, so "a" is not a root and nothing reaches it.
+  EXPECT_FALSE(tree.update_transform("a", "a", 0, 0, 0, 0, 0, 0, 1));
   EXPECT_TRUE(tree.get_roots().empty());
-  auto f = tree.find_frame("a");
-  ASSERT_NE(f, nullptr);
-  EXPECT_EQ(f->parent_id, "a");
-  auto snap = tree.snapshot();  // Must terminate with no roots.
+  EXPECT_EQ(tree.find_frame("a"), nullptr);
+  auto snap = tree.snapshot();
   EXPECT_TRUE(snap.roots.empty());
 }
 
@@ -221,23 +218,35 @@ TEST(TFTreeTest, SnapshotTerminatesOnCycle) {
   }
 }
 
-TEST(TFTreeTest, BackEdgeCycleTerminates) {
+TEST(TFTreeTest, DirectTwoNodeCycleRejection) {
   TFTree tree;
-  tree.update_transform("", "a", 0, 0, 0, 0, 0, 0, 1);
-  tree.update_transform("a", "b", 0, 0, 0, 0, 0, 0, 1);
-  // Re-parenting "a" away from the "" root must clean the stale "" -> a link
-  // (Issue #7), so the a<->b cycle becomes unreachable from any root.
-  tree.update_transform("b", "a", 0, 0, 0, 0, 0, 0, 1);
-  auto roots = tree.get_roots();
-  ASSERT_EQ(roots.size(), 1u);  // Only "" remains a root.
-  EXPECT_EQ(roots[""]->children.count("a"), 0u);  // Stale link cleaned.
-  // The a<->b cycle still exists in the live tree (parent_id preserved)...
-  EXPECT_EQ(tree.find_frame("a")->parent_id, "b");
-  EXPECT_EQ(tree.find_frame("b")->parent_id, "a");
-  // ...but is unreachable from roots, so snapshot terminates with an empty "".
-  auto snap = tree.snapshot();
-  ASSERT_EQ(snap.roots.size(), 1u);
-  EXPECT_TRUE(snap.roots[0].children.empty());
+  EXPECT_TRUE(tree.update_transform("a", "b", 1, 0, 0, 0, 0, 0, 1));
+  EXPECT_FALSE(tree.update_transform("b", "a", 2, 0, 0, 0, 0, 0, 1));
+
+  auto a = tree.find_frame("a");
+  auto b = tree.find_frame("b");
+  ASSERT_NE(a, nullptr);
+  ASSERT_NE(b, nullptr);
+  EXPECT_EQ(a->parent_id, "");
+  EXPECT_EQ(b->parent_id, "a");
+  EXPECT_EQ(a->children.count("b"), 1u);
+  EXPECT_EQ(b->children.count("a"), 0u);
+}
+
+TEST(TFTreeTest, MultiHopCycleRejection) {
+  TFTree tree;
+  EXPECT_TRUE(tree.update_transform("a", "b", 0, 0, 0, 0, 0, 0, 1));
+  EXPECT_TRUE(tree.update_transform("b", "c", 0, 0, 0, 0, 0, 0, 1));
+  EXPECT_TRUE(tree.update_transform("c", "d", 0, 0, 0, 0, 0, 0, 1));
+
+  // Any attempt to make an ancestor the child of a descendant must be rejected.
+  EXPECT_FALSE(tree.update_transform("d", "a", 0, 0, 0, 0, 0, 0, 1));
+  EXPECT_FALSE(tree.update_transform("c", "a", 0, 0, 0, 0, 0, 0, 1));
+  EXPECT_FALSE(tree.update_transform("d", "b", 0, 0, 0, 0, 0, 0, 1));
+
+  // Non-cyclic extensions should succeed.
+  EXPECT_TRUE(tree.update_transform("d", "e", 0, 0, 0, 0, 0, 0, 1));
+  EXPECT_EQ(tree.find_frame("e")->parent_id, "d");
 }
 
 TEST(TFTreeTest, ClearRemovesAll) {

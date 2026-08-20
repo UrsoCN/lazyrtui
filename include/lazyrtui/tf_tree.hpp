@@ -38,7 +38,7 @@ struct TFSnapshot {
 
 class TFTree {
 public:
-  void update_transform(const std::string &parent, const std::string &child,
+  bool update_transform(const std::string &parent, const std::string &child,
                         double tx, double ty, double tz, double rx, double ry,
                         double rz, double rw, double timestamp = 0.0);
   std::map<std::string, std::shared_ptr<TFTreeNode>> get_roots() const;

@@ -5,11 +5,35 @@
 
 namespace lazyrtui {
 
-void TFTree::update_transform(const std::string &parent,
+bool TFTree::update_transform(const std::string &parent,
                               const std::string &child, double tx, double ty,
                               double tz, double rx, double ry, double rz,
                               double rw, double timestamp) {
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // Cycle detection:
+  // 1. Direct self-loop (parent == child with non-empty frame)
+  if (parent == child && !parent.empty()) {
+    return false;
+  }
+
+  // 2. Ancestor cycle: check if `parent` is currently a descendant of `child`.
+  // If `child` is already in the ancestor chain of `parent`, making `parent`
+  // the parent of `child` would create a cycle (child -> ... -> parent -> child).
+  if (!parent.empty() && !child.empty()) {
+    std::string ancestor = parent;
+    std::set<std::string> seen;
+    while (!ancestor.empty() && seen.insert(ancestor).second) {
+      if (ancestor == child) {
+        return false; // Cycle rejected!
+      }
+      auto it = frames_.find(ancestor);
+      if (it == frames_.end()) {
+        break;
+      }
+      ancestor = it->second->parent_id;
+    }
+  }
 
   // Get or create parent
   auto parent_it = frames_.find(parent);
@@ -53,6 +77,7 @@ void TFTree::update_transform(const std::string &parent,
 
   // Add child to parent's children map
   parent_it->second->children[child] = child_node;
+  return true;
 }
 
 std::map<std::string, std::shared_ptr<TFTreeNode>> TFTree::get_roots() const {

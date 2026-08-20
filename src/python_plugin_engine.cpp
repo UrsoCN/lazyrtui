@@ -51,6 +51,11 @@ PythonPluginEngine::~PythonPluginEngine() {
   }
   plugin_modules_.clear();
 
+  {
+    std::lock_guard<std::mutex> lock(plugins_mutex_);
+    loaded_plugins_.clear();
+  }
+
   if (initialized_ && Py_IsInitialized()) {
     // Py_Finalize(); // Optionally finalize if owned
   }
@@ -163,19 +168,27 @@ bool PythonPluginEngine::load_plugin_file(const std::string &file_path) {
   info.module_name = module_name;
   info.file_path = file_path;
 
-  // Replace or add info
-  bool updated = false;
-  for (auto &item : loaded_plugins_) {
-    if (item.module_name == module_name) {
-      item = info;
-      updated = true;
-      break;
+  // Replace or add info under mutex protection
+  {
+    std::lock_guard<std::mutex> lock(plugins_mutex_);
+    bool updated = false;
+    for (auto &item : loaded_plugins_) {
+      if (item.module_name == module_name) {
+        item = info;
+        updated = true;
+        break;
+      }
     }
+    if (!updated)
+      loaded_plugins_.push_back(info);
   }
-  if (!updated)
-    loaded_plugins_.push_back(info);
 
   return true;
+}
+
+std::vector<PythonPluginInfo> PythonPluginEngine::loaded_plugins() const {
+  std::lock_guard<std::mutex> lock(plugins_mutex_);
+  return loaded_plugins_;
 }
 
 std::string

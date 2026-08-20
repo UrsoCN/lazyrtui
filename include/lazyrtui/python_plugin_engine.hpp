@@ -2,6 +2,7 @@
 
 #include <map>
 #include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
@@ -41,15 +42,14 @@ public:
                                 const std::string &topic_name,
                                 const std::string &json_body);
 
-  /// Get list of loaded Python plugins
-  const std::vector<PythonPluginInfo> &loaded_plugins() const {
-    return loaded_plugins_;
-  }
+  /// Get list of loaded Python plugins (thread-safe, returns snapshot copy)
+  std::vector<PythonPluginInfo> loaded_plugins() const;
 
 private:
   std::string fetch_python_error();
 
   bool initialized_ = false;
+  mutable std::mutex plugins_mutex_;
   std::vector<PythonPluginInfo> loaded_plugins_;
 
   // Map of module_name -> PyObject* (borrowed/owned module reference)

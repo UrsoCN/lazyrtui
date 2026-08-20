@@ -2,9 +2,11 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace lazyrtui {
 
@@ -325,6 +327,41 @@ TEST_F(PythonPluginEngineTest, LoadPluginsFromNestedSubdirectories) {
             "plugin_speech");
   EXPECT_EQ(engine.find_matching_plugin("/cmd_vel", "geometry_msgs/msg/Twist"),
             "plugin_teleop");
+}
+
+TEST_F(PythonPluginEngineTest, ConcurrentLoadedPluginsAccess) {
+  PythonPluginEngine engine;
+  std::vector<std::string> paths;
+  for (int i = 0; i < 5; ++i) {
+    paths.push_back(WritePlugin(
+        "concurrent_plugin_" + std::to_string(i),
+        "def match(t, m):\n    return False\ndef render(msg, s):\n    return {}\n"));
+  }
+
+  std::atomic<bool> stop{false};
+  std::vector<std::thread> readers;
+  for (int r = 0; r < 4; ++r) {
+    readers.emplace_back([&engine, &stop]() {
+      while (!stop.load()) {
+        auto plugins = engine.loaded_plugins();
+        for (const auto &p : plugins) {
+          EXPECT_FALSE(p.module_name.empty());
+        }
+      }
+    });
+  }
+
+  for (const auto &path : paths) {
+    EXPECT_TRUE(engine.load_plugin_file(path));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  stop.store(true);
+  for (auto &t : readers) {
+    t.join();
+  }
+
+  EXPECT_EQ(engine.loaded_plugins().size(), 5u);
 }
 
 }  // namespace lazyrtui

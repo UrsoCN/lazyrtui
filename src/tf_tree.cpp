@@ -11,16 +11,20 @@ bool TFTree::update_transform(const std::string &parent,
                               double rw, double timestamp) {
   std::lock_guard<std::mutex> lock(mutex_);
 
+  if (child.empty()) {
+    return false;
+  }
+
   // Cycle detection:
-  // 1. Direct self-loop (parent == child with non-empty frame)
-  if (parent == child && !parent.empty()) {
+  // 1. Direct self-loop
+  if (parent == child) {
     return false;
   }
 
   // 2. Ancestor cycle: check if `parent` is currently a descendant of `child`.
   // If `child` is already in the ancestor chain of `parent`, making `parent`
   // the parent of `child` would create a cycle (child -> ... -> parent -> child).
-  if (!parent.empty() && !child.empty()) {
+  if (!parent.empty()) {
     std::string ancestor = parent;
     std::set<std::string> seen;
     while (!ancestor.empty() && seen.insert(ancestor).second) {
@@ -35,14 +39,6 @@ bool TFTree::update_transform(const std::string &parent,
     }
   }
 
-  // Get or create parent
-  auto parent_it = frames_.find(parent);
-  if (parent_it == frames_.end()) {
-    auto new_parent = std::make_shared<TFTreeNode>();
-    new_parent->frame_id = parent;
-    parent_it = frames_.emplace(parent, new_parent).first;
-  }
-
   // Get or create child
   auto child_it = frames_.find(child);
   if (child_it == frames_.end()) {
@@ -52,19 +48,17 @@ bool TFTree::update_transform(const std::string &parent,
   }
 
   auto &child_node = child_it->second;
-  // Re-parenting: remove the child from its previous parent's children map so
-  // stale branch pointers don't survive a parent change. The previous parent
-  // frame may not exist yet (a frame created as a parent defaults to an empty
-  // parent_id) — the lookup guards that case. This also cleans re-parenting
-  // away from the literal "" root frame (parent_id ""), which the old
-  // !parent_id.empty() guard skipped, leaving a duplicated subtree in
-  // snapshots.
+
+  // Re-parenting: remove the child from its previous parent's children map
   if (child_node->parent_id != parent) {
-    auto old_parent_it = frames_.find(child_node->parent_id);
-    if (old_parent_it != frames_.end()) {
-      old_parent_it->second->children.erase(child);
+    if (!child_node->parent_id.empty()) {
+      auto old_parent_it = frames_.find(child_node->parent_id);
+      if (old_parent_it != frames_.end()) {
+        old_parent_it->second->children.erase(child);
+      }
     }
   }
+
   child_node->parent_id = parent;
   child_node->translation.x = tx;
   child_node->translation.y = ty;
@@ -75,8 +69,18 @@ bool TFTree::update_transform(const std::string &parent,
   child_node->rotation.w = rw;
   child_node->last_update = timestamp;
 
-  // Add child to parent's children map
-  parent_it->second->children[child] = child_node;
+  // If parent is non-empty, link to parent frame.
+  // If parent is empty, this frame is a root (parent_id == ""); do not create a dummy "" frame.
+  if (!parent.empty()) {
+    auto parent_it = frames_.find(parent);
+    if (parent_it == frames_.end()) {
+      auto new_parent = std::make_shared<TFTreeNode>();
+      new_parent->frame_id = parent;
+      parent_it = frames_.emplace(parent, new_parent).first;
+    }
+    parent_it->second->children[child] = child_node;
+  }
+
   return true;
 }
 

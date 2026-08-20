@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
@@ -27,6 +28,69 @@
 using namespace ftxui;
 
 namespace lazyrtui {
+
+namespace {
+
+// Counts the rendered lines of a (possibly multi-line) string element.
+int count_lines(const std::string &s) {
+  return std::max(1, 1 + (int)std::count(s.begin(), s.end(), '\n'));
+}
+
+// Called from Render() only: publishes the content height (in lines) and
+// clamps the scroll offset against it.
+void update_scroll_state(LazyRTUIApp::ScrollState &state, int content_lines) {
+  state.content = std::max(0, content_lines);
+  state.offset =
+      std::clamp(state.offset, 0, std::max(0, state.content - 1));
+}
+
+// Records the viewport height of the wrapped frame during layout, so
+// PageUp/PageDown can step by one pane height.
+class ViewportRecorder : public ftxui::Node {
+ public:
+  ViewportRecorder(ftxui::Elements children, LazyRTUIApp::ScrollState &state)
+      : ftxui::Node(std::move(children)), state_(state) {}
+
+  void ComputeRequirement() override {
+    children_[0]->ComputeRequirement();
+    requirement_ = children_[0]->requirement();
+  }
+
+  void SetBox(ftxui::Box box) override {
+    box_ = box;
+    const int height = box.y_max - box.y_min + 1;
+    if (height > 0) {
+      state_.page = height;
+    }
+    children_[0]->SetBox(box);
+  }
+
+  void Render(ftxui::Screen &screen) override {
+    children_[0]->Render(screen);
+  }
+
+ private:
+  LazyRTUIApp::ScrollState &state_;
+};
+
+// Canonical FTXUI scroll viewport: pins the content so `state.offset` is the
+// first visible line, inside a vertical frame with a scrollbar.
+ftxui::Element scroll_view(ftxui::Element content,
+                           LazyRTUIApp::ScrollState &state) {
+  auto framed = std::move(content) |
+                ftxui::focusPosition(0, state.offset + state.page / 2) |
+                ftxui::vscroll_indicator | ftxui::yframe;
+  return std::make_shared<ViewportRecorder>(ftxui::unpack(std::move(framed)),
+                                            state);
+}
+
+// Auto-following scroll viewport for Menu components: the frame keeps the
+// focused (selected) entry visible while navigating.
+ftxui::Element scroll_menu(ftxui::Element content) {
+  return std::move(content) | ftxui::vscroll_indicator | ftxui::yframe;
+}
+
+}  // namespace
 
 LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr,
                          const Config &config)
@@ -142,6 +206,8 @@ void LazyRTUIApp::toggle_topic_subscription(int index) {
   std::lock_guard<std::mutex> lock(data_mutex_);
   if (index < 0 || index >= (int)topics_list_.size())
     return;
+
+  topic_scroll_.offset = 0;  // UI-thread only: restart at the top on toggle.
 
   std::string full_str = topics_list_[index];
   size_t pos = full_str.find(" [");
@@ -301,10 +367,13 @@ void LazyRTUIApp::refresh_data() {
 }
 
 Component LazyRTUIApp::make_nodes_tab() {
-  auto menu = Menu(ConstStringListRef(nodes_menu_.get()), &selected_node_);
+  MenuOption node_opt;
+  node_opt.on_change = [this]() { node_scroll_.offset = 0; };
+  auto menu =
+      Menu(ConstStringListRef(nodes_menu_.get()), &selected_node_, node_opt);
 
   auto left_pane = Renderer(menu, [this, menu]() {
-    return window(text("Nodes"), menu->Render()) |
+    return window(text("Nodes"), scroll_menu(menu->Render())) |
            (node_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
@@ -317,12 +386,11 @@ Component LazyRTUIApp::make_nodes_tab() {
     }
 
     Elements items;
-    if (selected != "None" && snap) {
-      auto it = snap->node_details.find(selected);
-      if (it == snap->node_details.end()) {
+    if (selected != "None") {
+      if (!snap || snap->node_details.find(selected) == snap->node_details.end()) {
         items.push_back(text("Waiting for node detail...") | dim);
       } else {
-        const auto &detail = it->second;
+        const auto &detail = snap->node_details.find(selected)->second;
 
         items.push_back(text("Publishers:") | bold);
         if (detail.publishers.empty()) {
@@ -357,7 +425,9 @@ Component LazyRTUIApp::make_nodes_tab() {
       items.push_back(text("No node selected"));
     }
 
-    return window(text("Node Details: " + selected), vbox(items)) |
+    update_scroll_state(node_scroll_, (int)items.size());
+    return window(text("Node Details: " + selected),
+                  scroll_view(vbox(items), node_scroll_)) |
            (node_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 
@@ -371,10 +441,14 @@ Component LazyRTUIApp::make_nodes_tab() {
 }
 
 Component LazyRTUIApp::make_topics_tab() {
-  auto menu = Menu(ConstStringListRef(topics_menu_.get()), &selected_topic_);
+  MenuOption topic_opt;
+  topic_opt.on_change = [this]() { topic_scroll_.offset = 0; };
+  auto menu =
+      Menu(ConstStringListRef(topics_menu_.get()), &selected_topic_, topic_opt);
 
   auto left_pane = Renderer(menu, [this, menu]() {
-    return window(text("Topics (Space/Enter to Toggle)"), menu->Render()) |
+    return window(text("Topics (Space/Enter to Toggle)"),
+                  scroll_menu(menu->Render())) |
            (topic_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
@@ -400,6 +474,7 @@ Component LazyRTUIApp::make_topics_tab() {
     }
 
     Elements topic_windows;
+    int line_count = 0;  // Estimated content height of the stacked windows.
     const std::map<std::string, std::vector<std::string>> empty_messages;
     for (const auto &topic_name : subscribed) {
       Elements msgs;
@@ -442,6 +517,7 @@ Component LazyRTUIApp::make_topics_tab() {
         }
 
         std::string win_title = " " + topic_name + " [" + py_module + ".py] ";
+        line_count += (int)msgs.size() + 2;  // +2 for the window borders.
         topic_windows.push_back(window(text(win_title), vbox(msgs)) | flex);
       } else {
         // Default raw topic renderer
@@ -464,12 +540,14 @@ Component LazyRTUIApp::make_topics_tab() {
           msgs.push_back(text("Waiting for messages...") | dim);
         }
 
+        line_count += (int)msgs.size() + 2;  // +2 for the window borders.
         topic_windows.push_back(
             window(text(" Raw Echo: " + topic_name + " "), vbox(msgs)) | flex);
       }
     }
 
-    return vbox(topic_windows);
+    update_scroll_state(topic_scroll_, line_count);
+    return scroll_view(vbox(topic_windows), topic_scroll_);
   });
 
   auto container =
@@ -498,6 +576,7 @@ void LazyRTUIApp::call_selected_service() {
     std::lock_guard<std::mutex> lock(data_mutex_);
     service_response_ = "Calling " + name + " ...";
   }
+  service_scroll_.offset = 0;  // UI-thread only: show the fresh response.
   std::string request_json = service_request_json_;
   ros_mgr_->call_service_async(
       name, type, request_json,
@@ -525,6 +604,7 @@ void LazyRTUIApp::send_selected_goal() {
     std::lock_guard<std::mutex> lock(data_mutex_);
     action_response_ = "[status] Sending goal to " + name + " ...\n";
   }
+  action_scroll_.offset = 0;  // UI-thread only: show the fresh response.
 
   ros_mgr_->send_action_goal_async(
       name, type, action_goal_json_,
@@ -568,6 +648,7 @@ void LazyRTUIApp::send_selected_goal() {
 Component LazyRTUIApp::make_services_tab() {
   MenuOption menu_opt;
   menu_opt.on_change = [this]() {
+    service_scroll_.offset = 0;  // Reset response scroll when switching service.
     // Prefill the request template for the newly selected service.
     auto snap = std::atomic_load(&ui_snapshot_);
     if (!snap || !ros_mgr_ || selected_service_ < 0 ||
@@ -591,7 +672,7 @@ Component LazyRTUIApp::make_services_tab() {
                    menu_opt);
 
   auto left_pane = Renderer(menu, [this, menu]() {
-    return window(text("Services"), menu->Render()) |
+    return window(text("Services"), scroll_menu(menu->Render())) |
            (service_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
@@ -625,10 +706,12 @@ Component LazyRTUIApp::make_services_tab() {
       response = service_response_;
     }
 
+    update_scroll_state(service_scroll_, count_lines(response) + 2);
     return window(text("Service Caller: " + selected),
                   vbox({text("Request JSON:"), service_input_->Render() | border,
                         call_btn->Render(), separator(), text("Response:"),
-                        text(response) | borderLight})) |
+                        scroll_view(text(response) | borderLight,
+                                    service_scroll_)})) |
            (service_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 
@@ -644,6 +727,7 @@ Component LazyRTUIApp::make_services_tab() {
 Component LazyRTUIApp::make_actions_tab() {
   MenuOption menu_opt;
   menu_opt.on_change = [this]() {
+    action_scroll_.offset = 0;  // Reset response scroll when switching action.
     // Prefill the goal template for the newly selected action.
     auto snap = std::atomic_load(&ui_snapshot_);
     if (!snap || !ros_mgr_ || selected_action_ < 0 ||
@@ -667,7 +751,7 @@ Component LazyRTUIApp::make_actions_tab() {
                    menu_opt);
 
   auto left_pane = Renderer(menu, [this, menu]() {
-    return window(text("Actions"), menu->Render()) |
+    return window(text("Actions"), scroll_menu(menu->Render())) |
            (action_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
 
@@ -725,11 +809,13 @@ Component LazyRTUIApp::make_actions_tab() {
       resp_lines.push_back(text("No action response yet.") | dim);
     }
 
+    update_scroll_state(action_scroll_, (int)resp_lines.size() + 2);
     return window(
                text("Action Client: " + selected),
                vbox({text("Goal JSON:"), action_input_->Render() | border,
                      goal_btn->Render(), separator(), text("Response/Status:"),
-                     vbox(std::move(resp_lines)) | borderLight | yflex})) |
+                     scroll_view(vbox(std::move(resp_lines)) | borderLight,
+                                 action_scroll_)})) |
            (action_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 
@@ -779,6 +865,7 @@ Component LazyRTUIApp::make_interfaces_tab() {
     }
     if (!iface.empty()) {
       interface_detail_ = ros_mgr_->get_interface_detail(iface);
+      interface_scroll_.offset = 0;  // UI-thread only: new definition, top.
     }
   };
   auto item_menu = Menu(ConstStringListRef(interfaces_item_menu_.get()),
@@ -795,16 +882,18 @@ Component LazyRTUIApp::make_interfaces_tab() {
   }
 
   auto left_pane = Renderer(pkg_menu, [this, pkg_menu]() {
-    return window(text("Packages"), pkg_menu->Render()) |
+    return window(text("Packages"), scroll_menu(pkg_menu->Render())) |
            (interface_pane_focus_ == 0 ? borderLight : borderEmpty);
   });
   auto middle_pane = Renderer(item_menu, [this, item_menu]() {
-    return window(text("Interfaces"), item_menu->Render()) |
+    return window(text("Interfaces"), scroll_menu(item_menu->Render())) |
            (interface_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
   auto right_pane = Renderer([this]() {
+    update_scroll_state(interface_scroll_, count_lines(interface_detail_));
     return window(text("Interface Definition"),
-                  vbox({text(interface_detail_) | dim})) |
+                  scroll_view(text(interface_detail_) | dim,
+                              interface_scroll_)) |
            (interface_pane_focus_ == 2 ? borderLight : borderEmpty);
   });
 
@@ -860,7 +949,10 @@ Component LazyRTUIApp::make_tf_tab() {
     } else {
       items.push_back(text("ROS 2 not connected") | dim);
     }
-    return window(text("TF Tree (live transforms)"), vbox(items)) | borderLight;
+    update_scroll_state(tf_scroll_, (int)items.size());
+    return window(text("TF Tree (live transforms)"),
+                  scroll_view(vbox(items), tf_scroll_)) |
+           borderLight;
   });
 }
 
@@ -932,6 +1024,71 @@ bool LazyRTUIApp::is_text_input_focused() const {
   for (const auto &entry : text_inputs_) {
     if (entry.component && entry.component->Focused())
       return true;
+  }
+  return false;
+}
+
+bool LazyRTUIApp::handle_detail_scroll(Event e) {
+  // Scroll keys only drive the detail pane when the tab content is focused
+  // and no text input is focused (inputs need arrows for cursor movement).
+  if (main_vertical_focus_ != 1 || is_text_input_focused()) {
+    return false;
+  }
+
+  ScrollState *state = nullptr;
+  switch (selected_tab_) {
+    case 0:
+      if (node_pane_focus_ == 1) state = &node_scroll_;
+      break;
+    case 1:
+      if (topic_pane_focus_ == 1) state = &topic_scroll_;
+      break;
+    case 2:
+      if (service_pane_focus_ == 1) state = &service_scroll_;
+      break;
+    case 3:
+      if (action_pane_focus_ == 1) state = &action_scroll_;
+      break;
+    case 4:
+      if (interface_pane_focus_ == 2) state = &interface_scroll_;
+      break;
+    case 6:
+      state = &tf_scroll_;  // TF tab has a single pane.
+      break;
+    default:
+      break;
+  }
+  if (state == nullptr) {
+    return false;
+  }
+
+  // The offset may go out of range here; Render() clamps it against the
+  // freshly measured content height.
+  if (e == Event::ArrowUp || e == Event::PageUp) {
+    state->offset -= (e == Event::PageUp) ? state->page : 1;
+    return true;
+  }
+  if (e == Event::ArrowDown || e == Event::PageDown) {
+    state->offset += (e == Event::PageDown) ? state->page : 1;
+    return true;
+  }
+  if (e == Event::Home) {
+    state->offset = 0;
+    return true;
+  }
+  if (e == Event::End) {
+    state->offset = INT_MAX;  // Render() clamps to the last line.
+    return true;
+  }
+  if (e.is_mouse()) {
+    if (e.mouse().button == ftxui::Mouse::WheelUp) {
+      state->offset -= 3;
+      return true;
+    }
+    if (e.mouse().button == ftxui::Mouse::WheelDown) {
+      state->offset += 3;
+      return true;
+    }
   }
   return false;
 }
@@ -1179,6 +1336,12 @@ Component LazyRTUIApp::build_main_component(std::function<void()> exit_fn) {
         return true;
       }
 
+      return true;
+    }
+
+    // Scrollable detail panes: Up/Down/PgUp/PgDn/Home/End move the viewport
+    // when a detail pane has focus (left menus handle these keys themselves).
+    if (handle_detail_scroll(e)) {
       return true;
     }
 

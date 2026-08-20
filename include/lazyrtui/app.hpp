@@ -71,6 +71,15 @@ class SnapshotStringList : public ftxui::ConstStringListRef::Adapter {
 
 class LazyRTUIApp {
 public:
+  // Scroll state of one framed pane (UI-thread only; never published in
+  // UiSnapshot). Render() refreshes `content` (content height in lines) and
+  // clamps `offset`; event handling adjusts `offset` only.
+  struct ScrollState {
+    int offset = 0;
+    int content = 1;
+    int page = 10;
+  };
+
   LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr, const Config &config);
   ~LazyRTUIApp();
   void run();
@@ -78,10 +87,29 @@ public:
   build_main_component(std::function<void()> exit_fn = nullptr);
   bool is_text_input_focused() const;
 
+  // Test accessors for the detail-pane scroll offsets.
+  int node_detail_scroll() const { return node_scroll_.offset; }
+  int topic_detail_scroll() const { return topic_scroll_.offset; }
+  int service_detail_scroll() const { return service_scroll_.offset; }
+  int action_detail_scroll() const { return action_scroll_.offset; }
+  int interface_detail_scroll() const { return interface_scroll_.offset; }
+  int tf_detail_scroll() const { return tf_scroll_.offset; }
+  // Test accessors for the measured content height of each detail pane.
+  int node_scroll_content() const { return node_scroll_.content; }
+  int topic_scroll_content() const { return topic_scroll_.content; }
+  int service_scroll_content() const { return service_scroll_.content; }
+  int action_scroll_content() const { return action_scroll_.content; }
+  int interface_scroll_content() const { return interface_scroll_.content; }
+  int tf_scroll_content() const { return tf_scroll_.content; }
+
   int selected_tab() const { return selected_tab_; }
   int main_vertical_focus() const { return main_vertical_focus_; }
+  int node_pane_focus() const { return node_pane_focus_; }
+  int topic_pane_focus() const { return topic_pane_focus_; }
   int service_pane_focus() const { return service_pane_focus_; }
   int action_pane_focus() const { return action_pane_focus_; }
+  int interface_pane_focus() const { return interface_pane_focus_; }
+  int tf_pane_focus() const { return tf_pane_focus_; }
   bool show_exit_dialog() const { return show_exit_dialog_; }
   bool show_help() const { return show_help_; }
   const std::string &service_request_json() const {
@@ -108,6 +136,10 @@ private:
   // Service/action invocation shared by the tab buttons and keybindings.
   void call_selected_service();
   void send_selected_goal();
+
+  // Consumes Up/Down/PgUp/PgDn/Home/End for the currently focused detail
+  // pane (UI-thread scroll state only). Returns true when handled.
+  bool handle_detail_scroll(ftxui::Event e);
 
   // UI state
   int selected_tab_ = 0;
@@ -204,6 +236,15 @@ private:
   // TF tab state
   int selected_tf_ = 0;
   int tf_pane_focus_ = 0;
+
+  // Scrollable detail pane state (UI-thread only; adjusted by events and
+  // clamped during Render). See ScrollState.
+  ScrollState node_scroll_;
+  ScrollState topic_scroll_;
+  ScrollState service_scroll_;
+  ScrollState action_scroll_;
+  ScrollState interface_scroll_;
+  ScrollState tf_scroll_;
 
   // Python Topic Plugin Engine
   std::unique_ptr<PythonPluginEngine> python_plugin_engine_;

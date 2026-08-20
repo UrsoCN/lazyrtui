@@ -31,7 +31,9 @@
 | 20 | `update_transform` 环与自闭环检测 | P1 | `src/tf_tree.cpp`, `test/tf_tree_test.cpp` | 增加直接自环与祖先链多跳成环检测，拦截并拒绝成环 transform，确保 DAG 拓扑合法 | ✅ `45cc4b2` |
 | 21 | `loaded_plugins()` 跨线程读取保护 | P1 | `src/python_plugin_engine.cpp`, `python_plugin_engine.hpp` | 新增 `plugins_mutex_` 互斥锁保护 `loaded_plugins_`，提供线程安全的快照复制访问 | ✅ `b8a85c7` |
 | 22 | `""` 根帧显示二义性消除 | P2 | `src/tf_tree.cpp`, `test/tf_tree_test.cpp` | `header.frame_id == ""` 时直接将子帧标为根帧（`parent_id == ""`），消除虚拟 `""` 帧与重复根节点 | ✅ `1b2faf5` |
-| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），28+ 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` + `9ecbbc3` |
+| 23 | 工作空间包 Typesupport 动态库路径解析 | P1 | `src/ros_manager.cpp`, `test/app_test.cpp` | `dlopen` 增加 `ament_index_cpp::get_package_prefix` 路径解析与 C/C++ 符号回退，解决工作空间包（如 `speech_interface`）无法自动补全 Goal JSON 问题 | ✅ `ccd97e3` |
+| 24 | 全局 ScrollView 与可滚动视口及鼠标滚轮支持 | P1 | `src/app.cpp`, `app.hpp`, `test/app_test.cpp` | 基于 `focusPosition` + `vscroll_indicator` + `yframe` + `ViewportRecorder` 实现通用滚动视口；支持按键 (Up/Dn/PgUp/PgDn/Home/End) 与鼠标滚轮，切菜单时自动重置滚动偏置 | ✅ `5d12f32` |
+| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），29+ 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` + `9ecbbc3` + `5d12f32` |
 
 **验证基线**：`make -C build lazyrtui` 零警告；`ctest` 6/6 目标（28+ 用例）通过；工作树干净；每 commit 均经独立审查（`fix-review:` 承载整改）。
 

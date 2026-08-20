@@ -2,6 +2,7 @@
 #include "lazyrtui/app.hpp"
 #include "lazyrtui/config_loader.hpp"
 #include <ftxui/component/event.hpp>
+#include <ftxui/dom/node.hpp>
 #include <ftxui/screen/screen.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <std_srvs/srv/set_bool.hpp>
@@ -50,6 +51,145 @@ TEST(AppTest, GlobalHotkeysWorkOutsideInputMode) {
   // 'y' confirms exit
   comp->OnEvent(ftxui::Event::Character('y'));
   EXPECT_TRUE(exited);
+}
+
+TEST(AppTest, DetailPaneScrollKeysMoveAndClampOffset) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Nodes tab: Tab moves focus from the list to the detail pane.
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.node_pane_focus(), 1);
+
+  // Arrow keys move the viewport by one line.
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.node_detail_scroll(), 1);
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.node_detail_scroll(), 2);
+  comp->OnEvent(ftxui::Event::ArrowUp);
+  EXPECT_EQ(app.node_detail_scroll(), 1);
+
+  // PageUp/PageDown step by the pane height (default 10 before layout).
+  comp->OnEvent(ftxui::Event::PageDown);
+  EXPECT_EQ(app.node_detail_scroll(), 11);
+  comp->OnEvent(ftxui::Event::PageUp);
+  EXPECT_EQ(app.node_detail_scroll(), 1);
+
+  // End stores a bottom sentinel that Render() clamps to the last line.
+  comp->OnEvent(ftxui::Event::End);
+  (void)comp->Render();
+  EXPECT_EQ(app.node_scroll_content(), 1);  // Demo data: single detail line.
+  EXPECT_EQ(app.node_detail_scroll(), app.node_scroll_content() - 1);
+
+  // Home returns to the top; Render() clamps negative offsets too.
+  comp->OnEvent(ftxui::Event::Home);
+  (void)comp->Render();
+  EXPECT_EQ(app.node_detail_scroll(), 0);
+  comp->OnEvent(ftxui::Event::ArrowUp);
+  comp->OnEvent(ftxui::Event::ArrowUp);
+  (void)comp->Render();
+  EXPECT_EQ(app.node_detail_scroll(), 0);
+
+  // With the left menu focused, scroll keys drive the menu, not the pane.
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.node_pane_focus(), 0);
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.node_detail_scroll(), 0);
+}
+
+TEST(AppTest, DetailPaneScrollDeferredToFocusedInput) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Services tab: focus the right pane (the request input gets focus).
+  comp->OnEvent(ftxui::Event::Character('3'));
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.service_pane_focus(), 1);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // Arrow keys belong to the input; the response viewport must not scroll.
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.service_detail_scroll(), 0);
+
+  // Tab moves focus to the Call button; now the pane scrolls.
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_FALSE(app.is_text_input_focused());
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.service_detail_scroll(), 1);
+  comp->OnEvent(ftxui::Event::PageDown);
+  EXPECT_EQ(app.service_detail_scroll(), 11);
+}
+
+TEST(AppTest, TfAndInterfacePanesScroll) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // TF tab is single-pane: scroll keys always scroll the tree view.
+  comp->OnEvent(ftxui::Event::Character('7'));
+  EXPECT_EQ(app.selected_tab(), 6);
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.tf_detail_scroll(), 1);
+  comp->OnEvent(ftxui::Event::Home);
+  EXPECT_EQ(app.tf_detail_scroll(), 0);
+
+  // Interfaces tab: the definition pane is the third pane.
+  comp->OnEvent(ftxui::Event::Character('5'));
+  EXPECT_EQ(app.selected_tab(), 4);
+  comp->OnEvent(ftxui::Event::ArrowDown);  // Drives the package menu.
+  EXPECT_EQ(app.interface_detail_scroll(), 0);
+  comp->OnEvent(ftxui::Event::Tab);
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.interface_pane_focus(), 2);
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_EQ(app.interface_detail_scroll(), 1);
+}
+
+TEST(AppTest, MouseWheelScrollingAndMenuReset) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Switch focus to Nodes detail pane
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.node_pane_focus(), 1);
+
+  // Mouse wheel down scrolls by 3 lines
+  ftxui::Mouse mouse_down{.button = ftxui::Mouse::WheelDown};
+  comp->OnEvent(ftxui::Event::Mouse("", mouse_down));
+  EXPECT_EQ(app.node_detail_scroll(), 3);
+
+  // Mouse wheel up scrolls up by 3 lines
+  ftxui::Mouse mouse_up{.button = ftxui::Mouse::WheelUp};
+  comp->OnEvent(ftxui::Event::Mouse("", mouse_up));
+  EXPECT_EQ(app.node_detail_scroll(), 0);
+
+  // Scroll down again, then switch back to menu and change selection
+  comp->OnEvent(ftxui::Event::Mouse("", mouse_down));
+  EXPECT_EQ(app.node_detail_scroll(), 3);
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_EQ(app.node_pane_focus(), 0);
+  comp->OnEvent(ftxui::Event::ArrowDown);  // Selection changes in menu
+  EXPECT_EQ(app.node_detail_scroll(), 0);  // Scroll offset reset
+}
+
+TEST(AppTest, ScrollableViewsRenderOnSmallScreen) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Laying the whole tree out on a small screen exercises the frame/scroller
+  // elements and must clip instead of overflowing.
+  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(100),
+                                      ftxui::Dimension::Fixed(24));
+  ftxui::Render(screen, comp->Render());
+
+  const std::string output = screen.ToString();
+  EXPECT_NE(output.find("Nodes"), std::string::npos);
+  // The node detail pane renders its waiting message inside the frame.
+  EXPECT_NE(output.find("Waiting for node detail..."), std::string::npos);
 }
 
 TEST(AppTest, SuppressesHotkeysAndTypesInServiceInput) {

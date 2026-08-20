@@ -37,7 +37,8 @@ struct UiSnapshot {
   // Cached during refresh so Render() never issues ROS graph queries.
   std::map<std::string, NodeDetail> node_details;    // key: "/ns/name"
   std::map<std::string, TopicDetail> topic_details;  // key: topic name
-  std::map<std::string, std::vector<std::string>> interfaces_tree;  // pkg -> iface list
+  std::shared_ptr<const std::map<std::string, std::vector<std::string>>>
+      interfaces_tree;  // pkg -> iface list
 };
 
 // ConstStringListRef adapter over an atomically-published immutable list, so
@@ -121,7 +122,7 @@ private:
   void stop_refresh_timer();
   // Copies the working datasets into a new immutable snapshot and publishes
   // it plus the menu lists. Call while holding data_mutex_.
-  void publish_snapshot();
+  void publish_snapshot(bool full_menu_publish = true);
 
   std::shared_ptr<ROS2Manager> ros_mgr_;
   Config config_;
@@ -156,7 +157,8 @@ private:
   std::vector<std::string> actions_list_;
   std::map<std::string, NodeDetail> node_details_;    // key: "/ns/name"
   std::map<std::string, TopicDetail> topic_details_;  // key: topic name
-  std::map<std::string, std::vector<std::string>> interfaces_tree_;  // working copy
+  std::shared_ptr<const std::map<std::string, std::vector<std::string>>>
+      interfaces_tree_;  // working copy (shared immutable map)
 
   // Node tab state
   int selected_node_ = 0;

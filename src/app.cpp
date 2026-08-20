@@ -87,10 +87,12 @@ LazyRTUIApp::LazyRTUIApp(std::shared_ptr<ROS2Manager> ros_mgr,
 
   // Publish the initial (static/demo) data so the UI renders before the first
   // refresh cycle completes. Single-threaded construction: no lock needed.
-  publish_snapshot();
+  interfaces_tree_ =
+      std::make_shared<const std::map<std::string, std::vector<std::string>>>();
+  publish_snapshot(true);
 }
 
-void LazyRTUIApp::publish_snapshot() {
+void LazyRTUIApp::publish_snapshot(bool full_menu_publish) {
   // data_mutex_ must be held by the caller (except during construction).
   auto snap = std::make_shared<UiSnapshot>();
   snap->nodes_list = nodes_list_;
@@ -105,21 +107,25 @@ void LazyRTUIApp::publish_snapshot() {
   std::atomic_store(&ui_snapshot_,
                     std::shared_ptr<const UiSnapshot>(std::move(snap)));
 
-  nodes_menu_->publish(std::make_shared<const std::vector<std::string>>(nodes_list_));
-  topics_menu_->publish(
-      std::make_shared<const std::vector<std::string>>(topics_menu_labels_));
-  services_menu_->publish(
-      std::make_shared<const std::vector<std::string>>(services_list_));
-  actions_menu_->publish(
-      std::make_shared<const std::vector<std::string>>(actions_list_));
-  {
-    std::vector<std::string> pkg_names;
-    for (const auto& [pkg, ifaces] : interfaces_tree_) {
-      (void)ifaces;
-      pkg_names.push_back(pkg);
+  if (full_menu_publish) {
+    nodes_menu_->publish(
+        std::make_shared<const std::vector<std::string>>(nodes_list_));
+    topics_menu_->publish(
+        std::make_shared<const std::vector<std::string>>(topics_menu_labels_));
+    services_menu_->publish(
+        std::make_shared<const std::vector<std::string>>(services_list_));
+    actions_menu_->publish(
+        std::make_shared<const std::vector<std::string>>(actions_list_));
+    if (interfaces_tree_) {
+      std::vector<std::string> pkg_names;
+      pkg_names.reserve(interfaces_tree_->size());
+      for (const auto& [pkg, ifaces] : *interfaces_tree_) {
+        (void)ifaces;
+        pkg_names.push_back(pkg);
+      }
+      interfaces_pkg_menu_->publish(
+          std::make_shared<const std::vector<std::string>>(std::move(pkg_names)));
     }
-    interfaces_pkg_menu_->publish(
-        std::make_shared<const std::vector<std::string>>(pkg_names));
   }
 }
 
@@ -167,7 +173,7 @@ void LazyRTUIApp::toggle_topic_subscription(int index) {
               msgs.erase(msgs.begin());
             }
             msgs.push_back(msg);
-            publish_snapshot();
+            publish_snapshot(false);
             if (screen_) {
               screen_->PostEvent(Event::Custom);
             }
@@ -184,7 +190,7 @@ void LazyRTUIApp::toggle_topic_subscription(int index) {
     topics_menu_labels_.push_back(std::string(is_sub ? "[x] " : "[ ] ") +
                                   t_str);
   }
-  publish_snapshot();
+  publish_snapshot(true);
 }
 
 void LazyRTUIApp::start_refresh_timer() {
@@ -282,12 +288,16 @@ void LazyRTUIApp::refresh_data() {
     for (const auto &topic : subscribed_topics_) {
       topic_details_[topic] = ros_mgr_->get_topic_info(topic);
     }
-    interfaces_tree_ = ros_mgr_->get_interfaces_tree();
+    if (ros_mgr_) {
+      interfaces_tree_ =
+          std::make_shared<const std::map<std::string, std::vector<std::string>>>(
+              ros_mgr_->get_interfaces_tree());
+    }
   } catch (...) {
     // Silently handle exceptions during refresh
   }
 
-  publish_snapshot();
+  publish_snapshot(true);
 }
 
 Component LazyRTUIApp::make_nodes_tab() {
@@ -737,13 +747,13 @@ Component LazyRTUIApp::make_interfaces_tab() {
   pkg_opt.on_change = [this]() {
     // Publish the interface list of the newly selected package.
     auto snap = std::atomic_load(&ui_snapshot_);
-    if (!snap || selected_interface_pkg_ < 0 ||
-        selected_interface_pkg_ >= (int)snap->interfaces_tree.size()) {
+    if (!snap || !snap->interfaces_tree || selected_interface_pkg_ < 0 ||
+        selected_interface_pkg_ >= (int)snap->interfaces_tree->size()) {
       interfaces_item_menu_->publish(
           std::make_shared<const std::vector<std::string>>());
       return;
     }
-    auto it = snap->interfaces_tree.begin();
+    auto it = snap->interfaces_tree->begin();
     std::advance(it, selected_interface_pkg_);
     interfaces_item_menu_->publish(
         std::make_shared<const std::vector<std::string>>(it->second));
@@ -758,9 +768,9 @@ Component LazyRTUIApp::make_interfaces_tab() {
     auto snap = std::atomic_load(&ui_snapshot_);
     if (!snap || !ros_mgr_) return;
     std::string iface;
-    if (selected_interface_pkg_ >= 0 &&
-        selected_interface_pkg_ < (int)snap->interfaces_tree.size()) {
-      auto it = snap->interfaces_tree.begin();
+    if (snap->interfaces_tree && selected_interface_pkg_ >= 0 &&
+        selected_interface_pkg_ < (int)snap->interfaces_tree->size()) {
+      auto it = snap->interfaces_tree->begin();
       std::advance(it, selected_interface_pkg_);
       if (selected_interface_item_ >= 0 &&
           selected_interface_item_ < (int)it->second.size()) {
@@ -777,8 +787,8 @@ Component LazyRTUIApp::make_interfaces_tab() {
   // Seed the initial package selection (on_change does not fire on startup).
   {
     auto snap = std::atomic_load(&ui_snapshot_);
-    if (snap && !snap->interfaces_tree.empty()) {
-      auto it = snap->interfaces_tree.begin();
+    if (snap && snap->interfaces_tree && !snap->interfaces_tree->empty()) {
+      auto it = snap->interfaces_tree->begin();
       interfaces_item_menu_->publish(
           std::make_shared<const std::vector<std::string>>(it->second));
     }

@@ -109,17 +109,18 @@ TEST(AppTest, DetailPaneScrollDeferredToFocusedInput) {
   EXPECT_EQ(app.service_pane_focus(), 1);
   EXPECT_TRUE(app.is_text_input_focused());
 
-  // Arrow keys belong to the input; the response viewport must not scroll.
+  // In input mode, arrow keys do not scroll the response viewport.
   comp->OnEvent(ftxui::Event::ArrowDown);
   EXPECT_EQ(app.service_detail_scroll(), 0);
 
-  // Tab moves focus to the Call button; now the pane scrolls.
+  // Tab moves focus to the Call button; PageDown and mouse wheel scroll the response view.
   comp->OnEvent(ftxui::Event::Tab);
   EXPECT_FALSE(app.is_text_input_focused());
-  comp->OnEvent(ftxui::Event::ArrowDown);
-  EXPECT_EQ(app.service_detail_scroll(), 1);
   comp->OnEvent(ftxui::Event::PageDown);
-  EXPECT_EQ(app.service_detail_scroll(), 11);
+  EXPECT_EQ(app.service_detail_scroll(), 10);
+  ftxui::Mouse mouse_down{.button = ftxui::Mouse::WheelDown};
+  comp->OnEvent(ftxui::Event::Mouse("", mouse_down));
+  EXPECT_EQ(app.service_detail_scroll(), 13);
 }
 
 TEST(AppTest, TfAndInterfacePanesScroll) {
@@ -700,7 +701,7 @@ TEST(AppTest, ActionGoalSendAndStreamingExecution) {
   ros_mgr->stop();
 }
 
-TEST(AppTest, TabNavigationBetweenActionInputAndButtons) {
+TEST(AppTest, TabAndArrowNavigationInActionPane) {
   Config cfg;
   LazyRTUIApp app(nullptr, cfg);
   auto comp = app.build_main_component();
@@ -710,25 +711,77 @@ TEST(AppTest, TabNavigationBetweenActionInputAndButtons) {
   comp->OnEvent(ftxui::Event::Tab);
   EXPECT_TRUE(app.is_text_input_focused());
 
-  // Tab moves focus from input to "Send Goal" button
+  // 1. Tab from input moves focus to "Send Goal"
   comp->OnEvent(ftxui::Event::Tab);
   EXPECT_FALSE(app.is_text_input_focused());
 
-  // Tab moves focus to "Cancel Goal" button
-  comp->OnEvent(ftxui::Event::Tab);
+  // 2. ArrowRight moves focus to "Cancel Goal"
+  comp->OnEvent(ftxui::Event::ArrowRight);
   EXPECT_FALSE(app.is_text_input_focused());
 
-  // Tab wraps back to goal input
-  comp->OnEvent(ftxui::Event::Tab);
+  // 3. ArrowLeft moves focus back to "Send Goal"
+  comp->OnEvent(ftxui::Event::ArrowLeft);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // 4. ArrowDown from Send Goal also moves focus to "Cancel Goal"
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // 5. ArrowUp from button moves focus back up to goal input
+  comp->OnEvent(ftxui::Event::ArrowUp);
   EXPECT_TRUE(app.is_text_input_focused());
 
-  // Render check
+  // 6. ArrowDown from end of input moves to Send Goal, then ArrowUp moves back
+  comp->OnEvent(ftxui::Event::End);
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_FALSE(app.is_text_input_focused());
+  comp->OnEvent(ftxui::Event::ArrowUp);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // 7. Render check: Verify Send Goal, Cancel Goal, and closed bottom border
   auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120),
                                       ftxui::Dimension::Fixed(30));
   ftxui::Render(screen, comp->Render());
   std::string out = screen.ToString();
   EXPECT_NE(out.find("Send Goal"), std::string::npos);
   EXPECT_NE(out.find("Cancel Goal"), std::string::npos);
+  // Ensure the bottom closing border line is rendered
+  EXPECT_NE(out.find("╰"), std::string::npos);
+  EXPECT_NE(out.find("╯"), std::string::npos);
+}
+
+TEST(AppTest, TabAndArrowNavigationInServicePane) {
+  Config cfg;
+  LazyRTUIApp app(nullptr, cfg);
+  auto comp = app.build_main_component();
+
+  // Switch to Services tab (2) and right pane (1)
+  comp->OnEvent(ftxui::Event::Character('3'));
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // Tab moves to "Call Service" button
+  comp->OnEvent(ftxui::Event::Tab);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // ArrowUp moves back to Request JSON input
+  comp->OnEvent(ftxui::Event::ArrowUp);
+  EXPECT_TRUE(app.is_text_input_focused());
+
+  // ArrowDown from end of input moves to Call Service
+  comp->OnEvent(ftxui::Event::End);
+  comp->OnEvent(ftxui::Event::ArrowDown);
+  EXPECT_FALSE(app.is_text_input_focused());
+
+  // Render check
+  auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(120),
+                                      ftxui::Dimension::Fixed(30));
+  ftxui::Render(screen, comp->Render());
+  std::string out = screen.ToString();
+  EXPECT_NE(out.find("Call Service"), std::string::npos);
+  EXPECT_NE(out.find("Response:"), std::string::npos);
+  EXPECT_NE(out.find("╰"), std::string::npos);
+  EXPECT_NE(out.find("╯"), std::string::npos);
 }
 
 TEST(AppTest, ActionGoalCancelExecution) {

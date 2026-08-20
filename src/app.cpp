@@ -735,12 +735,13 @@ Component LazyRTUIApp::make_services_tab() {
       response = service_response_;
     }
 
-    update_scroll_state(service_scroll_, count_lines(response) + 2);
-    return window(text("Service Caller: " + selected),
-                  vbox({text("Request JSON:"), service_input_->Render() | border,
-                        call_btn->Render(), separator(), text("Response:"),
-                        scroll_view(text(response) | borderLight,
-                                    service_scroll_)})) |
+    update_scroll_state(service_scroll_, count_lines(response));
+    return window(
+               text("Service Caller: " + selected),
+               vbox({text("Request JSON:"), service_input_->Render() | border,
+                     call_btn->Render(), separator(), text("Response:"),
+                     scroll_view(text(response), service_scroll_) |
+                         borderLight | flex})) |
            (service_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 
@@ -797,9 +798,20 @@ Component LazyRTUIApp::make_actions_tab() {
   });
   auto goal_btn = Button("Send Goal", [this]() { send_selected_goal(); });
   auto cancel_btn = Button("Cancel Goal", [this]() { cancel_selected_goal(); });
+  int btn_focus = 0;
+  auto btn_container =
+      Container::Horizontal({goal_btn, cancel_btn}, &btn_focus);
+  auto custom_btn_container =
+      CatchEvent(btn_container, [&btn_focus](Event e) {
+        if (e == Event::ArrowDown && btn_focus == 0) {
+          btn_focus = 1;
+          return true;
+        }
+        return false;
+      });
 
   auto right_container =
-      Container::Vertical({action_input_, goal_btn, cancel_btn});
+      Container::Vertical({action_input_, custom_btn_container});
 
   auto right_pane = Renderer(right_container, [this, goal_btn, cancel_btn]() {
     auto snap = std::atomic_load(&ui_snapshot_);
@@ -841,14 +853,14 @@ Component LazyRTUIApp::make_actions_tab() {
       resp_lines.push_back(text("No action response yet.") | dim);
     }
 
-    update_scroll_state(action_scroll_, (int)resp_lines.size() + 2);
+    update_scroll_state(action_scroll_, (int)resp_lines.size());
     return window(
                text("Action Client: " + selected),
                vbox({text("Goal JSON:"), action_input_->Render() | border,
                      hbox({goal_btn->Render(), text("  "), cancel_btn->Render()}),
                      separator(), text("Response/Status:"),
-                     scroll_view(vbox(std::move(resp_lines)) | borderLight,
-                                 action_scroll_)})) |
+                     scroll_view(vbox(std::move(resp_lines)), action_scroll_) |
+                         borderLight | flex})) |
            (action_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 
@@ -1069,6 +1081,7 @@ bool LazyRTUIApp::handle_detail_scroll(Event e) {
   }
 
   ScrollState *state = nullptr;
+  bool is_interactive_pane = false;
   switch (selected_tab_) {
     case 0:
       if (node_pane_focus_ == 1) state = &node_scroll_;
@@ -1077,10 +1090,16 @@ bool LazyRTUIApp::handle_detail_scroll(Event e) {
       if (topic_pane_focus_ == 1) state = &topic_scroll_;
       break;
     case 2:
-      if (service_pane_focus_ == 1) state = &service_scroll_;
+      if (service_pane_focus_ == 1) {
+        state = &service_scroll_;
+        is_interactive_pane = true;
+      }
       break;
     case 3:
-      if (action_pane_focus_ == 1) state = &action_scroll_;
+      if (action_pane_focus_ == 1) {
+        state = &action_scroll_;
+        is_interactive_pane = true;
+      }
       break;
     case 4:
       if (interface_pane_focus_ == 2) state = &interface_scroll_;
@@ -1093,6 +1112,15 @@ bool LazyRTUIApp::handle_detail_scroll(Event e) {
   }
   if (state == nullptr) {
     return false;
+  }
+
+  // In interactive panes (Services and Actions right pane), Up/Down arrows
+  // must navigate between inputs and buttons (e.g. Input <-> Goal/Cancel buttons).
+  // PageUp/PageDown, Home/End, and Mouse Wheel scroll the response view.
+  if (is_interactive_pane) {
+    if (e == Event::ArrowUp || e == Event::ArrowDown) {
+      return false;
+    }
   }
 
   // The offset may go out of range here; Render() clamps it against the

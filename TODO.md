@@ -33,8 +33,9 @@
 | 22 | `""` 根帧显示二义性消除 | P2 | `src/tf_tree.cpp`, `test/tf_tree_test.cpp` | `header.frame_id == ""` 时直接将子帧标为根帧（`parent_id == ""`），消除虚拟 `""` 帧与重复根节点 | ✅ `1b2faf5` |
 | 23 | 工作空间包 Typesupport 动态库路径解析 | P1 | `src/ros_manager.cpp`, `test/app_test.cpp` | `dlopen` 增加 `ament_index_cpp::get_package_prefix` 路径解析与 C/C++ 符号回退，解决工作空间包（如 `speech_interface`）无法自动补全 Goal JSON 问题 | ✅ `ccd97e3` |
 | 24 | 全局 ScrollView 与可滚动视口及鼠标滚轮支持 | P1 | `src/app.cpp`, `app.hpp`, `test/app_test.cpp` | 基于 `focusPosition` + `vscroll_indicator` + `yframe` + `ViewportRecorder` 实现通用滚动视口；支持按键 (Up/Dn/PgUp/PgDn/Home/End) 与鼠标滚轮，切菜单时自动重置滚动偏置 | ✅ `83b4ef5` |
-| 25 | Action 目标取消与 Cancel Goal 交互支持 | P1 | `src/ros_manager.cpp`, `src/app.cpp`, `test/app_test.cpp` | `ROS2Manager` 维护活跃 Action 目标 UUID，经 `action_msgs/srv/CancelGoal` 原生服务异步取消目标；Action 选项卡新增 `Cancel Goal` 按钮与焦点切换 | ✅ `75b8683` |
-| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），31+ 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` + `9ecbbc3` + `83b4ef5` + `75b8683` |
+| 25 | Action 目标取消与 Cancel Goal 交互支持 | P1 | `src/ros_manager.cpp`, `src/app.cpp`, `test/app_test.cpp` | `ROS2Manager` 维护活跃 Action 目标 UUID，经 `action_msgs/srv/CancelGoal` 原生服务异步取消目标；Action 选项卡新增 `Cancel Goal` 按钮与焦点切换 | ✅ `c9bb45e` |
+| 26 | Service/Action 右侧面板边框封闭与焦点方向键导航修复 | P1 | `src/app.cpp`, `test/app_test.cpp` | Response 视口 `borderLight` 外置并应用 `flex` 消除下方边框缺失；交互面板放行 Up/Down 方向键，支持 Send/Cancel 按钮与 JSON 输入框间双向方向键与 Tab 焦点切换 | ✅ `b67feb2` |
+| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），32+ 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` + `9ecbbc3` + `83b4ef5` + `c9bb45e` + `b67feb2` |
 
 **验证基线**：`make -C build lazyrtui` 零警告；`ctest` 6/6 目标（28+ 用例）通过；工作树干净；每 commit 均经独立审查（`fix-review:` 承载整改）。
 

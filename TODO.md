@@ -1,6 +1,6 @@
 # LazyRTUI - 代码评审问题清单与解决记录
 
-本文件记录代码评审发现的问题及 deepwork 会话的解决情况。原 TODO 的 **12 项问题已全部解决并提交**（每项含 `fix:` commit，审查发现的实质问题以 `fix-review:` commit 整改）；解决方案摘要见下表，未决事项见文末"后续跟进项"。
+本文件记录代码评审发现的问题及 deepwork 会话的解决情况。原 TODO 及后续跟进的 **18 项问题与扩展项已全部解决并提交**（每项含 `fix:` 或 `feat:` commit，审查发现的实质问题以 `fix-review:` commit 整改）；解决方案摘要见下表。
 
 ---
 
@@ -25,9 +25,15 @@
 | 14 | CatchEvent 隔离 Event::Custom 重绘 | P1 | `src/app.cpp` | 在 `CatchEvent` 最顶端放行 `Event::Custom`，防止高频 Topic 刷新意外关闭退出弹窗 | ✅ `3b17cb8` |
 | 15 | FTXUIConverter paragraph CJK 自动换行 | P1 | `src/ftxui_converter.cpp` | 基于 flexbox(gap=0) 实现 CJK/全角汉字级别换行与 ASCII 单词边界换行，解决长语音字幕溢出 | ✅ `cc1a00d` |
 | 16 | 插件分类目录体系与递归发现 | P2 | `src/python_plugin_engine.cpp` | `load_plugins_from_dir` 升级为 `recursive_directory_iterator`；建立 `speech/`、`teleop/`、`diagnostics/` 分类目录及 PEP 257 规范 | ✅ `833eaed` |
-| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），23 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` |
+| 17 | 全 parser 级 CDR 字节序往返测试 | P2 | `src/cdr_utils.hpp`, `test/cdr_utils_test.cpp` | CDR 解析器独立模块化；新增真实 ROS 2 消息类型大端/小端序列化解析往返与截断测试 | ✅ `9ecbbc3` |
+| 18 | Action 反馈流式显示与结果轮询 | P1 | `src/ros_manager.cpp`, `src/app.cpp` | `send_action_goal_async` 自动生成 UUID、订阅反馈 topic 并调用 `get_result`，支持终端状态彩色流式渲染 | ✅ `4f188fb` |
+| 19 | interfaces 树发布粒度优化 | P1 | `src/app.cpp`, `app.hpp` | `UiSnapshot::interfaces_tree` 改为不可变 `shared_ptr`；高频消息回调按需轻量发布，避免全量拷贝 | ✅ `a36a842` |
+| 20 | `update_transform` 环与自闭环检测 | P1 | `src/tf_tree.cpp`, `test/tf_tree_test.cpp` | 增加直接自环与祖先链多跳成环检测，拦截并拒绝成环 transform，确保 DAG 拓扑合法 | ✅ `45cc4b2` |
+| 21 | `loaded_plugins()` 跨线程读取保护 | P1 | `src/python_plugin_engine.cpp`, `python_plugin_engine.hpp` | 新增 `plugins_mutex_` 互斥锁保护 `loaded_plugins_`，提供线程安全的快照复制访问 | ✅ `b8a85c7` |
+| 22 | `""` 根帧显示二义性消除 | P2 | `src/tf_tree.cpp`, `test/tf_tree_test.cpp` | `header.frame_id == ""` 时直接将子帧标为根帧（`parent_id == ""`），消除虚拟 `""` 帧与重复根节点 | ✅ `1b2faf5` |
+| 新增 | 自动化测试套件扩展 | P2 | `CMakeLists.txt`, `test/` | 6 个 `ament_add_gtest` 目标（TFTree / ConfigLoader / FTXUIConverter / cdr_utils / python_plugin_engine / app），28+ 用例，`ctest` 100% 通过 | ✅ `4043544` + `72b8bbf` + `663a8c0` + `340421b` + `9ecbbc3` |
 
-**验证基线**：`make -C build lazyrtui` 零警告；`ctest` 6/6 目标（23 用例）通过；工作树干净；每 commit 均经独立审查（`fix-review:` 承载整改）。
+**验证基线**：`make -C build lazyrtui` 零警告；`ctest` 6/6 目标（28+ 用例）通过；工作树干净；每 commit 均经独立审查（`fix-review:` 承载整改）。
 
 ---
 
@@ -43,10 +49,5 @@
 
 ## 后续跟进项（未解决，按优先级）
 
-- [ ] **全 parser 级 CDR 字节序往返测试**：链接真实生成消息（如 `std_msgs/msg/Int32MultiArray`），翻转封装头字节后断言输出一致（Issue #10 审查建议，可同时覆盖有界序列回归）
-- [ ] **action 反馈流式显示**：当前 Send Goal 仅展示 accepted 状态；反馈/结果需订阅 feedback topic / 调用 GetResult 服务
-- [ ] **interfaces 树发布粒度**：`publish_snapshot` 每消息回调全量拷贝 interfaces 树（Issue #3B 备注），可改为仅在刷新周期发布
-- [ ] **`update_transform` 环检测**：当前允许 A→B→A 成环（Issue #7 审查备注）
-- [ ] **`loaded_plugins()` getter 保护**：无 GIL/互斥，跨线程读取有竞态风险（Issue #1 备注）
-- [ ] **`""` 根帧显示二义性**：TF 根帧以 `header.frame_id == ""` 发布时可能在树中重复显示（Issue #12 备注）
-- [ ] **迁移 Jazzy+ 时评估 `rosidl_dynamic_typesupport`**：届时可替代手写 introspection（dynmsg 继任者，Jazzy/Rolling 已发布）--低优先级
+*暂无（所有审查问题与跟进项均已全部解决并合并至已解决问题总览）。*
+

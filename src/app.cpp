@@ -511,44 +511,47 @@ void LazyRTUIApp::send_selected_goal() {
   std::string type = entry.substr(pos + 2);
   if (!type.empty() && type.back() == ']') type.pop_back();
 
-  std::string base_type = type;
-  for (const std::string& sfx : {"_SendGoal_Goal", "_SendGoal_Service", "_SendGoal",
-                                 "_GetResult_Service", "_GetResult", "_FeedbackMessage", "_Goal"}) {
-    auto p = base_type.rfind(sfx);
-    if (p != std::string::npos && p + sfx.length() == base_type.length()) {
-      base_type = base_type.substr(0, p);
-      break;
-    }
-  }
-
-  const std::string service_name = name + "/_action/send_goal";
-  const std::string service_type = base_type + "_SendGoal";
-
-  nlohmann::json goal;
-  try {
-    goal = nlohmann::json::parse(action_goal_json_);
-  } catch (...) {
-    goal = nlohmann::json::object();
-  }
-  std::vector<uint8_t> uuid_bytes(16);
-  {
-    std::random_device rd;
-    for (auto& b : uuid_bytes) b = static_cast<uint8_t>(rd());
-  }
-  nlohmann::json request;
-  request["goal_id"] = {{"uuid", uuid_bytes}};
-  request["goal"] = goal;
-
   {
     std::lock_guard<std::mutex> lock(data_mutex_);
-    action_response_ = "Sending goal to " + name + " ...";
+    action_response_ = "[status] Sending goal to " + name + " ...\n";
   }
-  ros_mgr_->call_service_async(
-      service_name, service_type, request.dump(),
-      [this](bool success, const std::string& response_json, double elapsed_ms) {
+
+  ros_mgr_->send_action_goal_async(
+      name, type, action_goal_json_,
+      [this](const std::string& feedback_json) {
         std::lock_guard<std::mutex> lock(data_mutex_);
-        action_response_ = (success ? "[ok] " : "[error] ") + response_json +
-                           " (" + std::to_string(elapsed_ms) + " ms)";
+        action_response_ += "[feedback] " + feedback_json + "\n";
+      },
+      [this](bool success, int8_t status, const std::string& result_json,
+             double elapsed_ms) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+        std::string status_str;
+        switch (status) {
+          case 1:
+            status_str = "ACCEPTED";
+            break;
+          case 2:
+            status_str = "EXECUTING";
+            break;
+          case 3:
+            status_str = "CANCELING";
+            break;
+          case 4:
+            status_str = "SUCCEEDED";
+            break;
+          case 5:
+            status_str = "CANCELED";
+            break;
+          case 6:
+            status_str = "ABORTED";
+            break;
+          default:
+            status_str = (success ? "OK" : "ERROR");
+            break;
+        }
+        action_response_ += "[" + status_str + "] " + result_json + " (" +
+                            std::to_string(static_cast<int>(elapsed_ms)) +
+                            " ms)\n";
       });
 }
 
@@ -688,11 +691,35 @@ Component LazyRTUIApp::make_actions_tab() {
       response = action_response_;
     }
 
+    Elements resp_lines;
+    std::istringstream stream(response);
+    std::string line;
+    while (std::getline(stream, line)) {
+      if (line.empty()) continue;
+      if (line.rfind("[ok]", 0) == 0 || line.rfind("[SUCCEEDED]", 0) == 0) {
+        resp_lines.push_back(text(line) | color(Color::GreenLight));
+      } else if (line.rfind("[error]", 0) == 0 || line.rfind("[ERROR]", 0) == 0 ||
+                 line.rfind("[ABORTED]", 0) == 0 || line.rfind("[CANCELED]", 0) == 0 ||
+                 line.rfind("[rejected]", 0) == 0) {
+        resp_lines.push_back(text(line) | color(Color::RedLight));
+      } else if (line.rfind("[feedback]", 0) == 0) {
+        resp_lines.push_back(text(line) | color(Color::CyanLight));
+      } else if (line.rfind("[accepted]", 0) == 0 || line.rfind("[ACCEPTED]", 0) == 0 ||
+                 line.rfind("[status]", 0) == 0 || line.rfind("[EXECUTING]", 0) == 0) {
+        resp_lines.push_back(text(line) | color(Color::YellowLight));
+      } else {
+        resp_lines.push_back(text(line));
+      }
+    }
+    if (resp_lines.empty()) {
+      resp_lines.push_back(text("No action response yet.") | dim);
+    }
+
     return window(
                text("Action Client: " + selected),
                vbox({text("Goal JSON:"), action_input_->Render() | border,
                      goal_btn->Render(), separator(), text("Response/Status:"),
-                     text(response) | borderLight})) |
+                     vbox(std::move(resp_lines)) | borderLight | yflex})) |
            (action_pane_focus_ == 1 ? borderLight : borderEmpty);
   });
 

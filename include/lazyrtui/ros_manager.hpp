@@ -50,6 +50,10 @@ using TopicCallback = std::function<void(const std::string &topic,
                                          const std::string &serialized_msg)>;
 using ServiceCallback = std::function<void(
     bool success, const std::string &response_json, double elapsed_ms)>;
+using ActionFeedbackCallback = std::function<void(
+    const std::string &feedback_json)>;
+using ActionResultCallback = std::function<void(
+    bool success, int8_t status, const std::string &result_json, double elapsed_ms)>;
 
 class ROS2Manager {
 public:
@@ -85,6 +89,13 @@ public:
                           const std::string &type_str,
                           const std::string &request_json,
                           ServiceCallback callback);
+
+  // Action goal
+  void send_action_goal_async(const std::string &action_name,
+                              const std::string &type_str,
+                              const std::string &goal_json,
+                              ActionFeedbackCallback feedback_cb,
+                              ActionResultCallback result_cb);
 
   // Interface tree
   std::map<std::string, std::vector<std::string>> get_interfaces_tree();

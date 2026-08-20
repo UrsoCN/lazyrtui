@@ -32,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <random>
 
 using namespace std::chrono_literals;
 
@@ -971,6 +972,129 @@ void ROS2Manager::call_service_async(const std::string& service_name, const std:
         execute_service_call(service_name, type_str, request_json, callback);
     });
     impl_->queue_cv_.notify_one();
+}
+
+void ROS2Manager::send_action_goal_async(
+    const std::string& action_name, const std::string& type_str,
+    const std::string& goal_json, ActionFeedbackCallback feedback_cb,
+    ActionResultCallback result_cb) {
+    std::string base_type = type_str;
+    for (const std::string& sfx :
+         {"_SendGoal_Goal", "_SendGoal_Service", "_SendGoal",
+          "_GetResult_Service", "_GetResult", "_FeedbackMessage", "_Goal"}) {
+        auto p = base_type.rfind(sfx);
+        if (p != std::string::npos && p + sfx.length() == base_type.length()) {
+            base_type = base_type.substr(0, p);
+            break;
+        }
+    }
+
+    std::vector<uint8_t> uuid_bytes(16);
+    {
+        std::random_device rd;
+        for (auto& b : uuid_bytes) {
+            b = static_cast<uint8_t>(rd());
+        }
+    }
+
+    nlohmann::json goal_obj;
+    try {
+        goal_obj = nlohmann::json::parse(goal_json);
+    } catch (...) {
+        goal_obj = nlohmann::json::object();
+    }
+
+    nlohmann::json send_goal_req;
+    send_goal_req["goal_id"] = {{"uuid", uuid_bytes}};
+    send_goal_req["goal"] = goal_obj;
+
+    const std::string feedback_topic = action_name + "/_action/feedback";
+    const std::string feedback_type = base_type + "_FeedbackMessage";
+    const std::string send_goal_srv = action_name + "/_action/send_goal";
+    const std::string send_goal_type = base_type + "_SendGoal";
+    const std::string get_result_srv = action_name + "/_action/get_result";
+    const std::string get_result_type = base_type + "_GetResult";
+
+    subscribe_topic(
+        feedback_topic, feedback_type,
+        [uuid_bytes, feedback_cb](const std::string& /*topic*/,
+                                  const std::string& msg_str) {
+            if (!feedback_cb) return;
+            size_t json_start = msg_str.find('{');
+            if (json_start == std::string::npos) return;
+            try {
+                auto json_obj = nlohmann::json::parse(msg_str.substr(json_start));
+                if (json_obj.contains("goal_id") &&
+                    json_obj["goal_id"].contains("uuid")) {
+                    auto msg_uuid =
+                        json_obj["goal_id"]["uuid"].get<std::vector<uint8_t>>();
+                    if (msg_uuid == uuid_bytes) {
+                        if (json_obj.contains("feedback")) {
+                            feedback_cb(json_obj["feedback"].dump());
+                        } else {
+                            feedback_cb(json_obj.dump());
+                        }
+                    }
+                }
+            } catch (...) {
+            }
+        });
+
+    call_service_async(
+        send_goal_srv, send_goal_type, send_goal_req.dump(),
+        [this, feedback_topic, get_result_srv, get_result_type, uuid_bytes,
+         result_cb](bool success, const std::string& response_json,
+                    double elapsed_ms) {
+            if (!success) {
+                unsubscribe_topic(feedback_topic);
+                if (result_cb) result_cb(false, 0, response_json, elapsed_ms);
+                return;
+            }
+
+            bool accepted = false;
+            try {
+                auto resp_obj = nlohmann::json::parse(response_json);
+                accepted = resp_obj.value("accepted", false);
+            } catch (...) {
+            }
+
+            if (!accepted) {
+                unsubscribe_topic(feedback_topic);
+                if (result_cb)
+                    result_cb(false, 1,
+                              "Goal was rejected by action server: " + response_json,
+                              elapsed_ms);
+                return;
+            }
+
+            nlohmann::json get_result_req;
+            get_result_req["goal_id"] = {{"uuid", uuid_bytes}};
+
+            call_service_async(
+                get_result_srv, get_result_type, get_result_req.dump(),
+                [this, feedback_topic, result_cb](
+                    bool res_success, const std::string& res_json,
+                    double res_elapsed_ms) {
+                    unsubscribe_topic(feedback_topic);
+                    if (!result_cb) return;
+                    if (!res_success) {
+                        result_cb(false, 0, res_json, res_elapsed_ms);
+                        return;
+                    }
+                    int8_t status = 0;
+                    std::string result_str = res_json;
+                    try {
+                        auto res_obj = nlohmann::json::parse(res_json);
+                        status = res_obj.value("status", 0);
+                        if (res_obj.contains("result")) {
+                            result_str = res_obj["result"].dump();
+                        }
+                    } catch (...) {
+                    }
+                    result_cb(status == 4, status, result_str,
+                              res_elapsed_ms);
+                });
+        });
 }
 
 void ROS2Manager::execute_service_call(const std::string& service_name, const std::string& type_str,

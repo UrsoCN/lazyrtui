@@ -519,4 +519,45 @@ TEST(AppTest, TopicEchoDeserializesStringAndBoolFields) {
   ros_mgr->stop();
 }
 
+TEST(AppTest, ActionGoalSendAndStreamingExecution) {
+  auto ros_mgr = std::make_shared<ROS2Manager>();
+  int argc = 1;
+  char arg0[] = "test_app";
+  char *argv[] = {arg0, nullptr};
+  bool started = ros_mgr->start(argc, argv);
+  ASSERT_TRUE(started);
+
+  std::mutex cv_m;
+  std::condition_variable cv;
+  bool result_called = false;
+  bool action_success = false;
+  int8_t action_status = 0;
+  std::string action_result;
+
+  ros_mgr->send_action_goal_async(
+      "/non_existent_action", "turtlesim/action/RotateAbsolute",
+      "{\"theta\": 1.57}",
+      [](const std::string &feedback) { (void)feedback; },
+      [&](bool success, int8_t status, const std::string &res, double elapsed) {
+        (void)elapsed;
+        std::lock_guard<std::mutex> lock(cv_m);
+        result_called = true;
+        action_success = success;
+        action_status = status;
+        action_result = res;
+        cv.notify_one();
+      });
+
+  {
+    std::unique_lock<std::mutex> lock(cv_m);
+    cv.wait_for(lock, std::chrono::seconds(5), [&]() { return result_called; });
+  }
+
+  EXPECT_TRUE(result_called);
+  EXPECT_FALSE(action_success);
+  EXPECT_FALSE(ros_mgr->is_topic_subscribed("/non_existent_action/_action/feedback"));
+
+  ros_mgr->stop();
+}
+
 } // namespace lazyrtui

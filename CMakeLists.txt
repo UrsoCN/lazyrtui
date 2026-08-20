@@ -130,7 +130,16 @@ if(BUILD_TESTING)
                         nlohmann_json::nlohmann_json)
 
   ament_add_gtest(test_cdr_utils test/cdr_utils_test.cpp)
-  target_include_directories(test_cdr_utils PRIVATE src)
+  target_include_directories(test_cdr_utils PRIVATE src include)
+  target_link_libraries(test_cdr_utils
+                        nlohmann_json::nlohmann_json)
+  ament_target_dependencies(test_cdr_utils
+    rclcpp
+    std_msgs
+    geometry_msgs
+    rosidl_typesupport_introspection_cpp
+    rosidl_typesupport_cpp
+  )
 
   ament_add_gtest(test_python_plugin_engine test/python_plugin_engine_test.cpp
                   src/python_plugin_engine.cpp)
